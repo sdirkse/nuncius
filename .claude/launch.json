@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "dashboard", "runtimeExecutable": "node", "runtimeArgs": ["bin/nuncius.js", "dashboard"], "port": 7317 },
+    { "name": "dashboard-preview", "runtimeExecutable": "node", "runtimeArgs": ["bin/nuncius.js", "dashboard", "--port", "7318"], "port": 7318 }
+  ]
+}

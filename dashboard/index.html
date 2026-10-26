@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nuncius</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --codex: #2a78d6;
+    --cursor: #eb6834;
+    --claude: #1baf7a;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --track: #ecebe6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --codex: #3987e5; --cursor: #d95926; --claude: #199e70; --track: #2c2c2a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --codex: #3987e5; --cursor: #d95926; --claude: #199e70; --track: #2c2c2a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  h2 .count { color: var(--muted); font-weight: 500; }
+  .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .filters { display: flex; gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .seg button { border: 0; background: none; color: var(--ink-2); padding: 6px 12px; font: inherit; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--track); color: var(--ink); font-weight: 600; }
+  select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .tile .label { color: var(--ink-2); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
+  .tile .value { font-size: 26px; font-weight: 650; margin: 4px 0 2px; letter-spacing: -0.02em; }
+  .tile .value small { font-size: 14px; color: var(--muted); font-weight: 500; }
+  .tile .note { color: var(--muted); font-size: 12px; }
+  .tile .hint { font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+  code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--track); padding: 1px 5px; border-radius: 4px; }
+  .meter { height: 6px; background: var(--track); border-radius: 3px; margin: 8px 0 6px; position: relative; overflow: hidden; }
+  .meter > span { position: absolute; inset: 0 auto 0 0; border-radius: 3px; }
+  .meter > i { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink-2); opacity: .5; }
+  .state { font-size: 12px; font-weight: 600; display: inline-flex; gap: 4px; align-items: center; color: var(--ink-2); }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: 200px; overflow: visible; }
+  .chart .total { color: var(--ink-2); font-size: 12px; margin: -8px 0 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend { display: inline-flex; align-items: center; gap: 6px; }
+  .tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--surface); padding: 6px 8px; border-radius: 6px; font-size: 12px; white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); opacity: 0; transition: opacity .1s; z-index: 2; }
+  .tables { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 1100px) { .tables { grid-template-columns: 1fr; } }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td { padding: 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bar { display: inline-block; height: 6px; border-radius: 0 3px 3px 0; vertical-align: middle; margin-right: 6px; }
+  .tool { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .fail { color: var(--critical); font-weight: 600; }
+  .warn { color: var(--ink-2); font-weight: 600; }
+  .prompt { color: var(--ink-2); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--muted); padding: 20px 8px; text-align: center; }
+  .err { background: var(--surface); border: 1px solid var(--critical); border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; display: none; }
+  .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--track); color: var(--ink-2); white-space: nowrap; }
+  .copy { border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); border-radius: 6px; font: 12px inherit; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+  .copy:hover { color: var(--ink); }
+  .live-head { display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline; margin-bottom: 8px; }
+  .live-head .big { font-size: 22px; font-weight: 650; }
+  .linkish { border: 0; background: none; padding: 0; font: inherit; color: var(--ink-2); cursor: pointer; text-align: left; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+  .linkish:hover { color: var(--ink); text-decoration: underline; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .toolbar input[type="search"] { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-width: 200px; flex: 1 1 200px; max-width: 360px; }
+  .pager { margin-top: 10px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .pager .sub { margin-right: auto; }
+  .pager button[aria-current="page"] { background: var(--track); color: var(--ink); font-weight: 600; }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  .pager .gap { color: var(--muted); padding: 0 2px; }
+  tr.total td { font-weight: 600; border-top: 1px solid var(--axis); }
+  dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--ink); padding: 0; width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 64px); }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  dialog .dhead { display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 8px; position: sticky; top: 0; background: var(--surface); }
+  dialog .dhead h2 { margin: 0; flex: 1; }
+  dialog .dbody { padding: 0 16px 16px; }
+  dialog dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0 0 12px; font-size: 13px; }
+  dialog dt { color: var(--muted); }
+  dialog dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--page); border: 1px solid var(--grid); border-radius: 8px; padding: 10px 12px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 4px 0 12px; max-height: 40vh; overflow: auto; }
+  dialog h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 0; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>nuncius</h1>
+      <div class="sub" id="updated">Loading…</div>
+      <div id="targets" style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
+    <div class="filters">
+      <div class="seg" role="group" aria-label="Period">
+        <button data-days="7">7 days</button>
+        <button data-days="30">30 days</button>
+        <button data-days="90">90 days</button>
+      </div>
+      <select id="project" aria-label="Project"><option value="">All projects</option></select>
+    </div>
+  </header>
+
+  <div class="err" id="err"></div>
+
+  <div class="section-title">Subscription limits</div>
+  <section class="grid" id="limits"></section>
+
+  <div class="section-title">Today</div>
+  <section class="grid" id="today"></section>
+
+  <div class="section-title">Now</div>
+  <section class="card" id="live"></section>
+
+  <section class="card chart" id="chart-tokens" style="margin-top:12px">
+    <h2>Tokens per day</h2>
+    <div class="total"></div>
+    <svg role="img"></svg>
+    <div class="tip"></div>
+  </section>
+
+  <section class="tables">
+    <div class="card">
+      <h2>Tokens per project</h2>
+      <div class="scroll"><table id="projects"></table></div>
+    </div>
+    <div class="card">
+      <h2>Token split</h2>
+      <div class="scroll"><table id="split"></table></div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:12px">
+    <h2>Open worktrees <span class="count" id="wt-count"></span></h2>
+    <div class="toolbar">
+      <select id="wt-state" aria-label="Worktree state">
+        <option value="">Every state</option>
+        <option value="ready">Ready to review</option>
+        <option value="sensitive">Sensitive files</option>
+        <option value="active">Running or queued</option>
+        <option value="failed">Failed or timed out</option>
+      </select>
+      <select id="wt-tool" aria-label="Worktree tool"></select>
+    </div>
+    <div class="scroll"><table id="worktrees"></table></div>
+    <div class="pager" id="wt-pager"></div>
+  </section>
+
+  <section class="card" style="margin-top:12px">
+    <h2>Tasks <span class="count" id="recent-count"></span></h2>
+    <div class="toolbar">
+      <input type="search" id="t-q" placeholder="Search prompt, agent, model or id" aria-label="Search tasks">
+      <select id="t-tool" aria-label="Task tool"></select>
+      <select id="t-outcome" aria-label="Task outcome">
+        <option value="">Every outcome</option>
+        <option value="ok">Succeeded</option>
+        <option value="failed">Failed</option>
+        <option value="refused">Refused</option>
+      </select>
+      <select id="t-size" aria-label="Tasks per page">
+        <option value="10">10 per page</option>
+        <option value="25">25 per page</option>
+        <option value="50">50 per page</option>
+        <option value="100">100 per page</option>
+      </select>
+    </div>
+    <div class="scroll"><table id="recent"></table></div>
+    <div class="pager" id="recent-pager"></div>
+  </section>
+</main>
+
+<dialog id="task" aria-labelledby="task-title">
+  <div class="dhead"><h2 id="task-title">Task</h2><button class="copy" id="task-close">Close</button></div>
+  <div class="dbody" id="task-body"></div>
+</dialog>
+
+<script>
+const TOOLS = { codex: 'Codex', cursor: 'Cursor', claude: 'Claude' };
+const ALL_TOOLS = ['codex', 'claude', 'cursor'];
+// The tools this user has (installed and enabled), plus any that still has usage in the period.
+let TOOL_KEYS = ALL_TOOLS;
+const shownTools = (s) => ALL_TOOLS.filter((t) => s.targets?.find((x) => x.name === t)?.available || s.totals[`${t}Runs`] > 0);
+// Lists are paged, newest first. Filters and the page survive the 15-second refresh; changing a
+// filter (or the period or project) goes back to page 1.
+const PAGE_SIZES = [10, 25, 50, 100];
+const WT_PAGE = 25;
+const state = { days: 30, project: '', tasks: { q: '', tool: '', outcome: '', page: 1, size: 25 }, wt: { state: '', tool: '', page: 1 } };
+try {
+  const saved = JSON.parse(localStorage.getItem('nuncius-dashboard') || '{}');
+  if ([7, 30, 90].includes(saved.days)) state.days = saved.days;
+  if (PAGE_SIZES.includes(saved.size)) state.tasks.size = saved.size;
+} catch {}
+const saveView = () => { try { localStorage.setItem('nuncius-dashboard', JSON.stringify({ days: state.days, size: state.tasks.size })); } catch {} };
+
+// One language throughout: English labels, English dates and numbers, whatever the browser's locale.
+const LOCALE = 'en-GB';
+const nf = new Intl.NumberFormat(LOCALE);
+const compact = new Intl.NumberFormat(LOCALE, { notation: 'compact', maximumFractionDigits: 1 });
+// For commands people paste into a shell: single quotes keep `$`, backticks and `"` literal.
+const shQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtDur = (ms) => ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : ms < 3600000 ? `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s` : `${Math.floor(ms / 3600000)}h ${Math.round((ms % 3600000) / 60000)}m`;
+const fmtWhen = (iso) => iso ? new Date(iso).toLocaleString(LOCALE, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '–';
+const fmtDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' });
+const hasTool = (t) => Object.prototype.hasOwnProperty.call(TOOLS, t);
+const toolCls = (t) => (hasTool(t) ? t : 'axis');
+const toolDot = (t) => `<span class="dot" style="background:var(--${toolCls(t)})"></span>`;
+const toolName = (t) => `<span class="tool">${toolDot(t)}${esc(hasTool(t) ? TOOLS[t] : t)}</span>`;
+const plural = (n, word) => `${nf.format(n)} ${word}${n === 1 ? '' : 's'}`;
+
+function relReset(iso) {
+  if (!iso) return 'reset time unknown';
+  const ms = new Date(iso) - Date.now();
+  if (ms <= 0) return 'has reset since';
+  const h = Math.floor(ms / 3600000), m = Math.round((ms % 3600000) / 60000);
+  return h >= 24 ? `resets in ${Math.floor(h / 24)}d ${h % 24}h` : h ? `resets in ${h}h ${m}m` : `resets in ${m}m`;
+}
+
+function statusOf(pct, max) {
+  if (pct == null || max == null) return null;
+  if (pct >= max) return { color: 'var(--critical)', icon: '■', text: 'Blocked' };
+  if (pct >= max * 0.75) return { color: 'var(--warning)', icon: '▲', text: 'Nearly used up' };
+  return { color: 'var(--good)', icon: '●', text: 'Well within' };
+}
+
+function tile({ label, tool, pct, max, value, note, hint }) {
+  const st = statusOf(pct, max);
+  const fill = pct == null ? 0 : Math.min(100, pct);
+  return `<div class="card tile">
+    <div class="label">${toolDot(tool)}${esc(label)}</div>
+    <div class="value">${value}</div>
+    ${max != null ? `<div class="meter" aria-hidden="true"><span style="width:${fill}%;background:${st ? st.color : 'var(--axis)'}"></span><i style="left:calc(${Math.min(100, max)}% - 1px)"></i></div>` : ''}
+    <div class="note">${st ? `<span class="state"><span style="color:${st.color}">${st.icon}</span>${st.text}</span> · ` : ''}${note}</div>
+    ${hint ? `<div class="hint">${hint}</div>` : ''}
+  </div>`;
+}
+
+function limitTile(tool, label, w, max, L, missing) {
+  return tile({
+    label: `${TOOLS[tool]} ${label}`, tool, max,
+    pct: w ? w.usedPercent : null,
+    value: w ? `${nf.format(Math.round(w.usedPercent))}%` : '–',
+    note: w ? `${relReset(w.resetsAt)} · stops at ${max}%` : missing,
+    hint: L && w ? `last seen ${fmtWhen(L.observedAt)}${L.source && /untrusted/.test(L.source) ? ' · reported by tasks only' : ''}` : '',
+  });
+}
+
+// 45 min, 3 h, 2 h 30 min.
+const fmtMinutes = (n) => (n < 60 ? `${nf.format(n)} min` : `${Math.floor(n / 60)} h${n % 60 ? ` ${n % 60} min` : ''}`);
+
+// A tool's daily limits that are set (tokens, tasks, run time) with today's use, nearest first.
+// Run time is the total of all that tool's tasks today, not the length of one task.
+function dailyCaps(s, tool) {
+  const b = s.budgets[tool] ?? {}, t = s.today;
+  return [
+    typeof b.maxTokensPerDay === 'number' && { used: t[`${tool}Tokens`], cap: b.maxTokensPerDay, fmt: (n) => `${compact.format(n)} tokens` },
+    typeof b.maxRunsPerDay === 'number' && { used: t[`${tool}Runs`], cap: b.maxRunsPerDay, fmt: (n) => plural(n, 'task') },
+    typeof b.maxAgentMinutesPerDay === 'number' && { used: Math.round(t[`${tool}AgentMs`] / 60000), cap: b.maxAgentMinutesPerDay, fmt: (n) => `${fmtMinutes(n)} of run time` },
+  ].filter(Boolean).sort((x, y) => y.used / y.cap - x.used / x.cap);
+}
+
+// Cursor exposes no subscription window, so nuncius enforces its own daily caps; the tile shows the
+// one closest to its limit.
+function cursorLimitTile(s) {
+  const caps = dailyCaps(s, 'cursor');
+  const top = caps[0];
+  return tile({
+    label: 'Cursor daily limits', tool: 'cursor', max: top ? 100 : null, pct: top ? (top.used / top.cap) * 100 : null,
+    value: top ? `${top.fmt(top.used)}<small> of ${top.fmt(top.cap)} today</small>` : '–',
+    note: 'Cursor does not share its subscription usage, so nuncius applies its own limits',
+    hint: caps.length ? `Each day, at most: ${caps.map((c) => c.fmt(c.cap)).join(' · ')} (all Cursor tasks together)` : 'No daily limits set',
+  });
+}
+
+function renderLimits(s) {
+  const b = s.budgets, C = s.codexLimits, A = s.claudeLimits;
+  const noClaude = 'not recorded yet';
+  const has = (t) => TOOL_KEYS.includes(t);
+  const tiles = [
+    ...(has('codex') ? [
+      limitTile('codex', '5-hour window', C?.primary, b.codex.max5HourPercent, C, 'no Codex usage seen yet'),
+      limitTile('codex', 'weekly window', C?.secondary, b.codex.maxWeeklyPercent, C, 'no Codex usage seen yet'),
+    ] : []),
+    ...(!has('claude') ? [] : A
+      ? [limitTile('claude', '5-hour window', A.primary, b.claude.max5HourPercent, A, noClaude), limitTile('claude', 'weekly window', A.secondary, b.claude.maxWeeklyPercent, A, noClaude)]
+      : [`<div class="card tile"><div class="label">${toolDot('claude')}Claude limits</div><div class="value">–</div><div class="note">not recorded yet · daily caps apply</div><div class="hint">${esc(s.claudeLimitsHint ?? '').replace(/`([^`]+)`/g, '<code>$1</code>')}</div></div>`]),
+    ...(has('cursor') ? [cursorLimitTile(s)] : []),
+  ];
+  document.getElementById('limits').innerHTML = tiles.length ? tiles.join('')
+    : `<div class="card tile"><div class="label">No targets found</div><div class="hint">Install and log in to at least one of <code>codex</code>, <code>cursor-agent</code> or <code>claude</code>; nuncius finds them on your PATH.</div></div>`;
+}
+
+function renderToday(s) {
+  const t = s.today;
+  // The meter measures against the nearest daily cap, whichever kind it is.
+  const capTile = (tool) => {
+    const tokens = t[`${tool}Tokens`], runs = t[`${tool}Runs`], top = dailyCaps(s, tool)[0];
+    return tile({
+      label: TOOLS[tool], tool, value: `${compact.format(tokens)}<small> tokens</small>`,
+      max: top ? 100 : null, pct: top ? (top.used / top.cap) * 100 : null,
+      note: `${plural(runs, 'task')} today${top ? ` · closest daily limit: ${top.fmt(top.used)} of ${top.fmt(top.cap)}` : ' · no daily limit'}`,
+    });
+  };
+  document.getElementById('today').innerHTML = TOOL_KEYS.map(capTile).join('');
+}
+
+const promptButton = (id, preview) => `<button class="linkish" data-task="${esc(id)}" title="Show the full task">${esc(preview || '(no prompt)')}</button>`;
+
+function renderLive(s) {
+  const q = s.queue, tasks = s.activeTasks;
+  const per = Object.entries(q.perTarget).filter(([, v]) => v.running || v.queued).map(([k, v]) => `${toolName(k)} ${v.running} running${v.queued ? `, ${v.queued} queued` : ''}`).join(' · ');
+  const head = `<div class="live-head"><span class="big">${q.running}</span><span class="sub">running (max ${q.limits.total}, ${q.limits.perTarget} per tool)</span>
+    <span class="big">${q.queued}</span><span class="sub">queued</span>${per ? `<span class="sub">${per}</span>` : ''}</div>`;
+  if (!tasks.length) { document.getElementById('live').innerHTML = head + `<div class="empty">Nothing is running.</div>`; return; }
+  document.getElementById('live').innerHTML = head + `<div class="scroll"><table><thead><tr><th>State</th><th>Tool</th><th>Project</th><th>Agent</th><th class="num">Duration</th><th>Task</th></tr></thead><tbody>` +
+    tasks.map((t) => {
+      const since = t.startedAt ?? t.createdAt;
+      return `<tr>
+        <td><span class="pill">${t.state === 'running' ? '● running' : '◌ queued'}</span>${t.network ? ' <span class="pill" title="May reach package registries">network</span>' : ''}</td>
+        <td>${toolName(t.target)}${t.model ? ` <span class="sub">${esc(t.model)}</span>` : ''}</td>
+        <td>${esc(t.project)}</td><td class="sub">${esc(t.agent)}</td>
+        <td class="num" data-since="${esc(since)}">${fmtDur(Date.now() - Date.parse(since))}</td>
+        <td>${promptButton(t.id, t.promptPreview)}</td></tr>`;
+    }).join('') + '</tbody></table></div>';
+}
+
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+
+// Bars per day; `series` stacks bottom-up with a 2px surface gap between segments.
+function barChart(el, daily, series, fmtVal, unit) {
+  const svg = el.querySelector('svg'), tip = el.querySelector('.tip');
+  const W = svg.clientWidth || 600, H = 200, padL = 44, padB = 22, padT = 8;
+  const totals = daily.map((d) => series.reduce((a, s) => a + s.value(d), 0));
+  const max = niceMax(Math.max(...totals, 0));
+  el.querySelector('.total').innerHTML = series.map((s) => {
+    const sum = daily.reduce((a, d) => a + s.value(d), 0);
+    return `<span class="legend">${series.length > 1 ? `<span class="dot" style="background:var(--${s.tool})"></span>` : ''}${esc(s.label)}: ${fmtVal(sum)} ${unit}</span>`;
+  }).join('') + `<span>over ${daily.length} days</span>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('aria-label', `${el.querySelector('h2').textContent}`);
+  const plotW = W - padL, plotH = H - padB - padT, step = plotW / daily.length;
+  const bw = Math.max(1, Math.min(28, step - 2));
+  const y = (v) => padT + plotH - (v / max) * plotH;
+  let out = '';
+  for (let i = 0; i <= 4; i++) {
+    const v = (max / 4) * i, yy = y(v);
+    out += `<line x1="${padL}" x2="${W}" y1="${yy}" y2="${yy}" stroke="var(${i ? '--grid' : '--axis'})" stroke-width="1"/>`;
+    out += `<text x="${padL - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${compact.format(v)}</text>`;
+  }
+  const labelEvery = Math.ceil(daily.length / 7);
+  daily.forEach((d, i) => {
+    const x = padL + i * step + (step - bw) / 2;
+    let base = padT + plotH;
+    const segs = series.map((s) => ({ s, v: s.value(d) })).filter((p) => p.v > 0);
+    segs.forEach((p, k) => {
+      const h = Math.max(1, (p.v / max) * plotH) - (k < segs.length - 1 ? 2 : 0);
+      const top = base - h;
+      const isTop = k === segs.length - 1, r = isTop ? Math.min(4, bw / 2, h) : 0;
+      out += r
+        ? `<path d="M${x},${base} V${top + r} Q${x},${top} ${x + r},${top} H${x + bw - r} Q${x + bw},${top} ${x + bw},${top + r} V${base} Z" fill="var(--${p.s.tool})"/>`
+        : `<rect x="${x}" y="${top}" width="${bw}" height="${h}" fill="var(--${p.s.tool})"/>`;
+      base = top - 2;
+    });
+    out += `<rect class="hit" data-i="${i}" x="${padL + i * step}" y="${padT}" width="${step}" height="${plotH}" fill="transparent"/>`;
+    if ((daily.length - 1 - i) % labelEvery === 0)
+      out += `<text x="${padL + i * step + step / 2}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--muted)">${new Date(d.day + 'T12:00:00').toLocaleDateString(LOCALE, { day: 'numeric', month: 'numeric' })}</text>`;
+  });
+  svg.innerHTML = out;
+  svg.onmousemove = (e) => {
+    const r = e.target.closest('.hit');
+    if (!r) { tip.style.opacity = 0; return; }
+    const i = +r.dataset.i, d = daily[i];
+    tip.innerHTML = `<b>${fmtDay(d.day)}</b>` + series.map((s) => `<br>${esc(s.label)}: ${fmtVal(s.value(d))} ${unit} · ${plural(s.runs(d), 'run')}`).join('');
+    const box = svg.getBoundingClientRect(), host = el.getBoundingClientRect();
+    tip.style.left = `${box.left - host.left + (padL + i * step + step / 2) * (box.width / W)}px`;
+    tip.style.top = `${box.top - host.top + Math.min(y(totals[i]), padT + plotH - 4) * (box.height / H)}px`;
+    tip.style.opacity = 1;
+  };
+  svg.onmouseleave = () => (tip.style.opacity = 0);
+}
+
+function renderProjects(s) {
+  const el = document.getElementById('projects');
+  if (!s.projects.length) { el.innerHTML = `<tr><td class="empty">No tasks in this period yet.</td></tr>`; return; }
+  const max = Math.max(...s.projects.flatMap((p) => TOOL_KEYS.map((t) => p[`${t}Tokens`])), 1);
+  const cell = (p, t) => {
+    const v = p[`${t}Tokens`], runs = p[`${t}Runs`];
+    return `<td class="num" title="${plural(runs, 'run')}">${v ? `<span class="bar" style="width:${Math.max(2, Math.round((v / max) * 48))}px;background:var(--${t})"></span>${compact.format(v)}` : '<span class="sub">–</span>'}</td>`;
+  };
+  el.innerHTML = `<thead><tr><th>Project</th>${TOOL_KEYS.map((t) => `<th class="num">${TOOLS[t]}</th>`).join('')}<th class="num">Failed</th><th>Last task</th></tr></thead><tbody>` +
+    s.projects.map((p) => `<tr>
+      <td><b>${esc(p.name)}</b></td>${TOOL_KEYS.map((t) => cell(p, t)).join('')}
+      <td class="num ${p.failures ? 'fail' : 'sub'}">${p.failures || '–'}</td>
+      <td class="sub">${fmtWhen(p.lastRunAt)}</td>
+    </tr>`).join('') + '</tbody>';
+}
+
+// Input includes cached input (what the tool read from its prompt cache), so input + output = total.
+function renderSplit(s) {
+  const el = document.getElementById('split'), T = s.totals;
+  const rows = TOOL_KEYS.filter((t) => T[`${t}Runs`]).map((t) => ({
+    name: toolName(t), runs: T[`${t}Runs`], input: T[`${t}InputTokens`], cached: T[`${t}CachedTokens`], output: T[`${t}OutputTokens`], total: T[`${t}Tokens`],
+  }));
+  if (!rows.length) { el.innerHTML = `<tr><td class="empty">No tokens used in this period yet.</td></tr>`; return; }
+  const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
+  const row = (r, cls = '') => `<tr class="${cls}"><td>${r.name}</td><td class="num">${nf.format(r.input)}</td><td class="num sub">${nf.format(r.cached)}</td><td class="num">${nf.format(r.output)}</td><td class="num"><b>${nf.format(r.total)}</b></td><td class="num sub">${nf.format(r.runs)}</td></tr>`;
+  el.innerHTML = `<thead><tr><th>Tool</th><th class="num">Input</th><th class="num" title="Part of input served from the prompt cache">of which cached</th><th class="num">Output</th><th class="num">Total</th><th class="num">Runs</th></tr></thead><tbody>` +
+    rows.map((r) => row(r)).join('') +
+    (rows.length > 1 ? row({ name: 'All', runs: sum('runs'), input: sum('input'), cached: sum('cached'), output: sum('output'), total: sum('total') }, 'total') : '') + '</tbody>';
+}
+
+const wtGroup = (w) => w.state === 'done' ? (w.sensitiveFiles ? 'sensitive' : 'ready') : w.state === 'running' || w.state === 'queued' ? 'active' : 'failed';
+function renderWorktrees(s) {
+  const el = document.getElementById('worktrees'), pagerEl = document.getElementById('wt-pager');
+  fillToolSelect('wt-tool', state.wt.tool);
+  const all = s.worktrees; // newest first (server)
+  const rows = all.filter((w) => (!state.wt.state || wtGroup(w) === state.wt.state) && (!state.wt.tool || w.target === state.wt.tool));
+  document.getElementById('wt-count').textContent = all.length ? (rows.length === all.length ? `${all.length}` : `${rows.length} of ${all.length}`) : '';
+  if (!all.length) { el.innerHTML = `<tr><td class="empty">No open worktrees. <span class="sub">Tasks without changes clean up after themselves, and applied work is removed automatically; <code>nuncius cleanup</code> also removes old ones.</span></td></tr>`; pagerEl.innerHTML = ''; return; }
+  if (!rows.length) { el.innerHTML = `<tr><td class="empty">No open worktrees match these filters. <button class="copy" data-clear="wt">Clear filters</button></td></tr>`; pagerEl.innerHTML = ''; return; }
+  const pages = Math.max(1, Math.ceil(rows.length / WT_PAGE));
+  state.wt.page = Math.min(state.wt.page, pages);
+  const shown = rows.slice((state.wt.page - 1) * WT_PAGE, state.wt.page * WT_PAGE);
+  pagerEl.innerHTML = pager('wt', { page: state.wt.page, pages, total: rows.length, size: WT_PAGE }, 'worktree');
+  el.innerHTML = `<thead><tr><th>Project</th><th>Tool</th><th>Branch</th><th>State</th><th class="num">Files</th><th>Since</th><th>Review</th></tr></thead><tbody>` +
+    shown.map((w) => {
+      const status = w.state === 'done'
+        ? (w.sensitiveFiles ? `<span class="warn"><span style="color:var(--warning)">▲</span> ${plural(w.sensitiveFiles, 'sensitive file')}</span>` : '<span style="color:var(--good)">●</span> ready to review')
+        : w.state === 'running' ? '● running' : w.state === 'queued' ? '◌ queued'
+        : `<span class="fail">■ ${w.state === 'timeout' ? 'timed out' : 'failed'}</span> <span class="sub">kept</span>`;
+      const cmd = w.review ?? `cd ${shQuote(w.path)}`;
+      return `<tr>
+        <td>${esc(w.project)}</td><td>${toolName(w.target)}</td>
+        <td><code>${esc(w.branch)}</code></td><td>${status}</td>
+        <td class="num">${w.files || '–'}</td><td class="sub">${fmtWhen(w.finishedAt ?? w.createdAt)}</td>
+        <td><button class="copy" data-copy="${esc(cmd)}" title="${esc(cmd)}">Copy ${w.review ? 'diff command' : 'path'}</button></td></tr>`;
+    }).join('') + '</tbody>';
+}
+
+// "Showing 26–50 of 57" plus Previous, page numbers (with gaps) and Next.
+function pager(key, { page, pages, total, size }, noun) {
+  const from = total ? (page - 1) * size + 1 : 0, to = Math.min(total, page * size);
+  const info = `<span class="sub">Showing ${nf.format(from)}–${nf.format(to)} of ${plural(total, noun)}</span>`;
+  if (pages <= 1) return info;
+  const nums = [...new Set([1, page - 1, page, page + 1, pages])].filter((n) => n >= 1 && n <= pages).sort((x, y) => x - y);
+  const btn = (n, label = n, extra = '') => `<button class="copy" data-pager="${key}" data-page="${n}" ${extra}>${label}</button>`;
+  let out = '', prev = 0;
+  for (const n of nums) {
+    if (n - prev > 1) out += '<span class="gap">…</span>';
+    out += btn(n, n, n === page ? 'aria-current="page"' : '');
+    prev = n;
+  }
+  return info + btn(page - 1, '‹ Previous', page <= 1 ? 'disabled' : '') + out + btn(page + 1, 'Next ›', page >= pages ? 'disabled' : '');
+}
+
+// Tool filter options: the tools shown on this dashboard, keeping the current choice.
+function fillToolSelect(id, value) {
+  const html = ['<option value="">Every tool</option>', ...TOOL_KEYS.map((t) => `<option value="${t}" ${t === value ? 'selected' : ''}>${TOOLS[t]}</option>`)].join('');
+  const el = document.getElementById(id);
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
+
+let lastTasks;
+function renderTasks(tp) {
+  lastTasks = tp;
+  const el = document.getElementById('recent'), pagerEl = document.getElementById('recent-pager');
+  const f = state.tasks, filtered = !!(f.q || f.tool || f.outcome);
+  fillToolSelect('t-tool', f.tool);
+  document.getElementById('t-size').value = String(f.size);
+  const all = last?.recentTotal ?? tp.total;
+  document.getElementById('recent-count').textContent = all ? (filtered ? `${tp.total} of ${all} in ${state.days} days` : `${all} in ${state.days} days`) : '';
+  state.tasks.page = tp.page; // the server clamps it when a filter shrank the list
+  if (!tp.total) {
+    el.innerHTML = filtered
+      ? `<tr><td class="empty">No tasks match these filters. <button class="copy" data-clear="tasks">Clear filters</button></td></tr>`
+      : `<tr><td class="empty">No tasks in this period. Start one with <code>nuncius codex "…"</code> or through MCP.</td></tr>`;
+    pagerEl.innerHTML = '';
+    return;
+  }
+  el.innerHTML = `<thead><tr><th>When</th><th>Tool</th><th>Project</th><th>Agent</th><th class="num">Tokens</th><th class="num">Duration</th><th>Task</th></tr></thead><tbody>` +
+    tp.items.map((r) => {
+      const outcome = r.outcome === 'refused' ? 'Refused' : 'Failed';
+      const model = r.modelsReported?.[0] ?? r.model;
+      return `<tr>
+      <td class="sub" style="white-space:nowrap">${fmtWhen(r.startedAt)}</td>
+      <td>${toolName(r.tool)}${model ? ` <span class="sub">${esc(model)}</span>` : ''}</td>
+      <td>${esc(r.project)}</td>
+      <td class="sub">${esc(r.agent)}</td>
+      <td class="num">${r.ok ? (r.usage?.totalTokens != null ? compact.format(r.usage.totalTokens) : '<span class="sub">–</span>') : `<span class="fail" title="${esc(r.error)}">■ ${outcome}</span>`}</td>
+      <td class="num">${fmtDur(r.wallMs || 0)}</td>
+      <td>${r.contentRemoved ? '<span class="sub" title="Nuncius keeps prompts, answers and output for retention.days after a task ends; the numbers stay">prompt and output removed (retention)</span>' : promptButton(r.id, r.promptPreview)}</td>
+    </tr>`;
+    }).join('') + '</tbody>';
+  pagerEl.innerHTML = pager('tasks', tp, 'task');
+}
+
+let last;
+// Which tools nuncius found: shown in the header, missing ones with the reason.
+function renderTargets(s) {
+  document.getElementById('targets').innerHTML = (s.targets ?? []).map((t) => t.available
+    ? `<span class="pill">${toolDot(t.name)}${esc(TOOLS[t.name])}</span>`
+    : `<span class="pill" style="opacity:.55" title="${esc(t.reason)}">${toolDot(t.name)}${esc(TOOLS[t.name])}: ${t.enabled ? 'not installed' : 'disabled'}</span>`).join(' ');
+}
+
+function renderAll(s) {
+  last = s;
+  TOOL_KEYS = shownTools(s);
+  renderTargets(s);
+  renderLimits(s); renderToday(s); renderLive(s);
+  barChart(document.getElementById('chart-tokens'), s.daily, TOOL_KEYS.map((t) => ({
+    tool: t, label: TOOLS[t], value: (d) => d[`${t}Tokens`], runs: (d) => d[`${t}Runs`],
+  })), (v) => compact.format(v), 'tokens');
+  renderProjects(s); renderSplit(s); renderWorktrees(s);
+  const sel = document.getElementById('project');
+  const opts = ['<option value="">All projects</option>', ...s.allProjects.map((p) => `<option ${p === state.project ? 'selected' : ''} value="${esc(p)}">${esc(p)}</option>`)].join('');
+  if (sel.innerHTML !== opts) sel.innerHTML = opts;
+  document.getElementById('updated').textContent = `Updated ${new Date(s.generatedAt).toLocaleTimeString(LOCALE)} · refreshes every 15 s`;
+}
+
+// The API token comes in the URL fragment nuncius printed; it is kept for this tab only.
+const TOKEN = (() => {
+  const t = new URLSearchParams(location.hash.slice(1)).get('t');
+  if (t) sessionStorage.setItem('nuncius-token', t);
+  return t || sessionStorage.getItem('nuncius-token') || '';
+})();
+const api = (url) => fetch(url, { headers: { 'x-nuncius-token': TOKEN } });
+
+const getJson = async (url) => {
+  const res = await api(url);
+  if (res.status === 401) throw Object.assign(new Error('no token'), { noAccess: true });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+};
+// Only the newest task request may render: a slow older one (fast typing) is dropped.
+let taskSeq = 0;
+const taskQuery = () => {
+  const f = state.tasks;
+  return new URLSearchParams({ days: state.days, project: state.project, tool: f.tool, outcome: f.outcome, q: f.q, page: f.page, size: f.size });
+};
+async function loadTasks() {
+  const seq = ++taskSeq;
+  try {
+    const tp = await getJson(`/api/tasks?${taskQuery()}`);
+    if (seq === taskSeq) renderTasks(tp);
+  } catch (e) {
+    if (seq === taskSeq) showError(e);
+  }
+}
+function showError(e) {
+  const err = document.getElementById('err');
+  err.textContent = e.noAccess
+    ? 'No access: open the full URL that `nuncius dashboard` printed (it ends in #t=…).'
+    : `Could not load the data (${e.message}). Is \`nuncius dashboard\` still running?`;
+  err.style.display = 'block';
+}
+
+async function load() {
+  const err = document.getElementById('err');
+  const seq = ++taskSeq;
+  try {
+    const [s, tp] = await Promise.all([getJson(`/api/summary?${new URLSearchParams({ days: state.days, project: state.project })}`), getJson(`/api/tasks?${taskQuery()}`)]);
+    renderAll(s);
+    if (seq === taskSeq) renderTasks(tp);
+    err.style.display = 'none';
+  } catch (e) {
+    showError(e);
+  }
+}
+
+// The detail view: everything shown as text, the target's answer included (it is target output).
+async function openTask(id) {
+  const dlg = document.getElementById('task'), body = document.getElementById('task-body');
+  document.getElementById('task-title').textContent = 'Task';
+  body.innerHTML = '<div class="empty">Loading…</div>';
+  if (!dlg.open) dlg.showModal();
+  let t;
+  try {
+    const res = await api(`/api/task?${new URLSearchParams({ id })}`);
+    if (!res.ok) throw new Error(res.status === 404 ? 'this task is no longer stored' : `HTTP ${res.status}`);
+    t = await res.json();
+  } catch (e) {
+    const r = lastTasks?.items.find((x) => x.id === id);
+    body.innerHTML = `<div class="empty">Could not load the task: ${esc(e.message)}.</div>${r ? `<h3>Prompt (first 160 characters)</h3><pre>${esc(r.promptPreview)}</pre>` : ''}`;
+    return;
+  }
+  const u = t.usage;
+  document.getElementById('task-title').innerHTML = `${toolName(t.target)} <span class="sub">· ${esc(t.project)} · ${fmtWhen(t.startedAt ?? t.createdAt)}</span>`;
+  const models = t.modelsReported.length ? t.modelsReported.join(', ') : t.model || 'CLI default';
+  const wt = t.worktree;
+  body.innerHTML = `<dl>
+      <dt>State</dt><dd>${esc(t.state)}${t.error ? ` · <span class="fail">${esc(t.error)}</span>` : ''}</dd>
+      <dt>Model</dt><dd>${esc(models)}</dd>
+      <dt>Agent</dt><dd>${esc(t.agent)}${t.caller ? ` <span class="sub">via ${esc(t.caller)}</span>` : ''}</dd>
+      <dt>Duration</dt><dd>${t.wallMs != null ? fmtDur(t.wallMs) : '–'}</dd>
+      <dt>Tokens</dt><dd>${u && u.totalTokens != null ? `${nf.format(u.totalTokens)} <span class="sub">= ${nf.format(u.inputTokens ?? 0)} input (${nf.format(u.cachedInputTokens ?? 0)} cached) + ${nf.format(u.outputTokens ?? 0)} output</span>` : '–'}</dd>
+      <dt>Network</dt><dd>${t.network ? 'package registries allowed' : 'own API only'}${t.blockedHosts.length ? ` · <span class="warn">blocked: ${esc(t.blockedHosts.join(', '))}</span>` : ''}</dd>
+      ${wt ? `<dt>Worktree</dt><dd><code>${esc(wt.branch)}</code> ${wt.removed ? '<span class="sub">removed</span>' : ''} ${wt.files.length ? `· ${plural(wt.files.length, 'file')} changed` : ''}${wt.sensitiveFiles.length ? ` · <span class="warn">▲ sensitive: ${esc(wt.sensitiveFiles.join(', '))}</span>` : ''}</dd>` : ''}
+    </dl>
+    ${t.warnings.length ? `<h3>Warnings</h3><pre>${esc(t.warnings.join('\n'))}</pre>` : ''}
+    <h3>Prompt</h3><pre>${esc(t.prompt)}</pre>
+    <h3>Answer</h3><pre>${t.output ? esc(t.output) : '<span class="sub">(none)</span>'}</pre>
+    ${wt?.review && !wt.removed ? `<button class="copy" data-copy="${esc(wt.review)}">Copy diff command</button> ` : ''}<button class="copy" data-copy="${esc(t.prompt)}">Copy prompt</button>`;
+}
+
+function syncButtons() {
+  document.querySelectorAll('.seg button').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.days === state.days)));
+}
+document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => {
+  state.days = +b.dataset.days; state.tasks.page = 1; state.wt.page = 1; syncButtons(); saveView(); load();
+}));
+document.getElementById('project').addEventListener('change', (e) => { state.project = e.target.value; state.tasks.page = 1; state.wt.page = 1; load(); });
+// Task filters run on the server; the search waits until typing pauses.
+const setTaskFilter = (patch) => { Object.assign(state.tasks, patch, { page: 1 }); loadTasks(); };
+let searchTimer;
+document.getElementById('t-q').addEventListener('input', (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => setTaskFilter({ q: e.target.value.trim() }), 250); });
+document.getElementById('t-tool').addEventListener('change', (e) => setTaskFilter({ tool: e.target.value }));
+document.getElementById('t-outcome').addEventListener('change', (e) => setTaskFilter({ outcome: e.target.value }));
+document.getElementById('t-size').addEventListener('change', (e) => { setTaskFilter({ size: +e.target.value }); saveView(); });
+// Worktree filters run here: the list is already complete.
+document.getElementById('wt-state').addEventListener('change', (e) => { state.wt.state = e.target.value; state.wt.page = 1; last && renderWorktrees(last); });
+document.getElementById('wt-tool').addEventListener('change', (e) => { state.wt.tool = e.target.value; state.wt.page = 1; last && renderWorktrees(last); });
+document.getElementById('task-close').addEventListener('click', () => document.getElementById('task').close());
+document.getElementById('task').addEventListener('click', (e) => { if (e.target.id === 'task') e.target.close(); }); // click on the backdrop
+document.addEventListener('click', async (e) => {
+  const task = e.target.closest('[data-task]');
+  if (task) { openTask(task.dataset.task); return; }
+  const pg = e.target.closest('[data-pager]');
+  if (pg && !pg.disabled) {
+    const page = +pg.dataset.page;
+    if (pg.dataset.pager === 'tasks') { state.tasks.page = page; loadTasks(); }
+    else { state.wt.page = page; last && renderWorktrees(last); }
+    return;
+  }
+  const clear = e.target.closest('[data-clear]');
+  if (clear) {
+    if (clear.dataset.clear === 'tasks') { document.getElementById('t-q').value = ''; setTaskFilter({ q: '', tool: '', outcome: '' }); }
+    else { Object.assign(state.wt, { state: '', tool: '', page: 1 }); document.getElementById('wt-state').value = ''; last && renderWorktrees(last); }
+    return;
+  }
+  const b = e.target.closest('.copy[data-copy]');
+  if (!b) return;
+  const label = b.textContent;
+  try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; } catch { b.textContent = 'Copy failed'; }
+  setTimeout(() => (b.textContent = label), 1500);
+});
+window.addEventListener('resize', () => last && renderAll(last));
+// Running durations tick every second without refetching.
+setInterval(() => document.querySelectorAll('[data-since]').forEach((td) => (td.textContent = fmtDur(Date.now() - Date.parse(td.dataset.since)))), 1000);
+syncButtons();
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>
