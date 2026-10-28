@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createProgress, progressView, cleanLabel, shortDuration, QUIET_SECONDS } from '../src/progress.js';
+import { createProgress, progressView, cleanLabel, shortDuration, shellLabel, QUIET_SECONDS } from '../src/progress.js';
 
 const feedAll = (p, events) => events.forEach((e) => p.feed(typeof e === 'string' ? e : JSON.stringify(e)));
 
@@ -36,6 +36,18 @@ test('codex --json: commands on start, file changes on completion', () => {
   assert.equal(s.commands, 1);
   assert.equal(s.filesEdited, 2);
   assert.equal(s.lastActivity, 'add b.js');
+});
+
+test('a finished step keeps its own label, and shell wrappers are taken off', () => {
+  const p = createProgress({ target: 'codex' });
+  feedAll(p, [
+    { type: 'item.started', item: { type: 'command_execution', command: `/bin/zsh -lc "rg -n 'Outbound mail' src"` } },
+    { type: 'item.completed', item: { type: 'command_execution', command: `/bin/zsh -lc "rg -n 'Outbound mail' src"`, exit_code: 0 } },
+  ]);
+  assert.equal(p.snapshot().lastActivity, "Shell: rg -n 'Outbound mail' src");
+  assert.equal(shellLabel("bash -lc 'npm test'"), 'Shell: npm test');
+  assert.equal(shellLabel('sh -c "ls"'), 'Shell: ls');
+  assert.equal(shellLabel('npm test'), 'Shell: npm test');
 });
 
 test('cursor stream-json: tool calls by kind', () => {

@@ -29,7 +29,7 @@ const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NUNCIUS_BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'nuncius.js');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // A running task's progress is written to its file at most this often.
-const PROGRESS_SAVE_MS = 3000;
+const PROGRESS_SAVE_MS = 1000;
 const PROGRESS_BATCH_MS = 250;
 
 export const tasksDir = () => path.join(dataDir(), 'tasks');
@@ -692,14 +692,14 @@ async function runTask(id, { echoStderr }, ctx) {
   ensureCanary(); // must exist before the target starts, so a nested call sees it denied
 
   ctx.startedAt = Date.now();
-  // What the target is doing, from its own event stream: kept in the task file (at most every few
-  // seconds, under the queue lock so it never overwrites a state the reaper set) and, from the CLI,
+  // What the target is doing, from its own event stream: kept in the task file (at most once a
+  // second, under the queue lock so it never overwrites a state the reaper set) and, from the CLI,
   // printed as it happens.
   const progress = createProgress({
     target: task.target, base: task.worktree.path, timeoutSeconds: taskTimeoutSeconds(config),
     onActivity: echoStderr ? (a) => process.stderr.write(`[nuncius] ${shortDuration((Date.now() - ctx.startedAt) / 1000)} ${a.what}\n`) : undefined,
   });
-  // Saved a moment after an event, so a burst of them lands in one write, and then at most every few seconds.
+  // Saved a moment after an event, so a burst of them lands in one write, and then at most once a second.
   let progressSaved = 0;
   let progressTimer = null;
   const saveProgress = () => {

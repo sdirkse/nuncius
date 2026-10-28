@@ -28,20 +28,27 @@ export function buildSummary({ days = 30, project = '' } = {}) {
   s.budgets = config.budgets;
   // Which tools this user has, so the dashboard only shows those (and any with usage in the period).
   s.targets = targetStatus(config).map(({ name, enabled, installed, available, reason }) => ({ name, enabled, installed, available, reason }));
-  s.queue = queueStatus(config);
   // Ask Codex for its current windows in the background (cached a minute): the next poll shows them.
   if (s.targets.find((t) => t.name === 'codex')?.available) freshCodexLimits(config).catch(() => {});
-  // Live tasks are shown for every project: the queue is shared.
-  s.activeTasks = listTasks()
-    .filter((t) => !TERMINAL.has(t.state))
-    .map((t) => ({ id: t.id, state: t.state, target: t.target, model: t.model, project: t.project, agent: t.agent, createdAt: t.createdAt, startedAt: t.startedAt ?? null, network: !!t.network, promptPreview: String(t.prompt ?? '').slice(0, 160),
-      // The page counts the times on itself between polls, so it gets the moments, not just the view.
-      progress: t.state === 'running' && t.progress ? { ...progressView(t.progress, { state: t.state, startedAt: t.startedAt }), lastActivityAt: t.progress.lastActivityAt ?? null, quietSeconds: QUIET_SECONDS } : null }));
+  const { queue, activeTasks } = buildLive(config);
+  s.queue = queue;
+  s.activeTasks = activeTasks;
   s.worktrees = openWorktrees()
     .filter((w) => !project || w.project === project)
     .map((w) => ({ ...w, files: w.files?.length ?? 0 }))
     .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''))); // newest first
   return s;
+}
+
+// The Now section on its own: cheap (task files only), so the page asks for it every few seconds.
+// Live tasks are shown for every project: the queue is shared.
+export function buildLive(config = loadConfig()) {
+  const activeTasks = listTasks()
+    .filter((t) => !TERMINAL.has(t.state))
+    .map((t) => ({ id: t.id, state: t.state, target: t.target, model: t.model, project: t.project, agent: t.agent, createdAt: t.createdAt, startedAt: t.startedAt ?? null, network: !!t.network, promptPreview: String(t.prompt ?? '').slice(0, 160),
+      // The page counts the times on itself between polls, so it gets the moments, not just the view.
+      progress: t.state === 'running' && t.progress ? { ...progressView(t.progress, { state: t.state, startedAt: t.startedAt }), lastActivityAt: t.progress.lastActivityAt ?? null, quietSeconds: QUIET_SECONDS } : null }));
+  return { queue: queueStatus(config), activeTasks, generatedAt: new Date().toISOString() };
 }
 
 // One page of the task list, with the dashboard's filters (see taskPage).
@@ -108,6 +115,9 @@ export function createServer(port, token) {
         const body = JSON.stringify(buildSummary({ days, project: url.searchParams.get('project') || '' }));
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(body);
+      } else if (url.pathname === '/api/live') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(buildLive()));
       } else if (url.pathname === '/api/tasks') {
         const p = url.searchParams;
         const body = JSON.stringify(buildTaskPage({

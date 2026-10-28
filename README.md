@@ -194,7 +194,7 @@ Open the full URL it prints: it ends in `#t=<token>`, a random token for this ru
 It refreshes every 15 seconds and filters by period (7, 30 or 90 days) and by project. It shows:
 - **Subscription limits:** Codex and Claude, 5-hour and weekly. The meter shows where Nuncius starts refusing tasks. If Claude's limits have not been recorded yet, it points to `nuncius install-statusline`. Cursor exposes no subscription usage, so its tile shows Nuncius's own daily caps for Cursor (runs, tokens, agent minutes) and how close today is to the nearest one.
 - **Today:** tokens and runs per tool, against the daily token caps when set.
-- **Now:** running and queued tasks, with tool, project, agent, a live duration against the timeout, and the last activity (how long ago, and what), marked when a task has been quiet for 5 minutes.
+- **Now:** running and queued tasks, with tool, project, agent, a live duration against the timeout, and the last activity: how long ago, and the step on one line (the full text and the counts of steps, edited files and commands are in its tooltip), marked when a task has been quiet for 5 minutes. This section refreshes every 2 seconds, the rest of the page every 15.
 - **Tokens per day**, Codex, Claude and Cursor stacked.
 - **Tokens per project**, per tool, with the number of failed tasks and the last task; the most recently active project first.
 - **Token split:** input (of which cached) and output tokens per tool for the period.

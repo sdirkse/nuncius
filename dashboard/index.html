@@ -84,6 +84,8 @@
   .prompt { color: var(--ink-2); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .empty { color: var(--muted); padding: 20px 8px; text-align: center; }
   .err { background: var(--surface); border: 1px solid var(--critical); border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; display: none; }
+  .activity { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 280px; }
+  .activity .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; }
   .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--track); color: var(--ink-2); white-space: nowrap; }
   .copy { border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); border-radius: 6px; font: 12px inherit; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
   .copy:hover { color: var(--ink); }
@@ -334,22 +336,25 @@ function renderToday(s) {
 
 const promptButton = (id, preview) => `<button class="linkish" data-task="${esc(id)}" title="Show the full task">${esc(preview || '(no prompt)')}</button>`;
 
-// How long ago the target last reported anything, and what. Quiet for long: a warning, nothing more.
+// How long ago the target last did something (bold, ticking), and the step on one short line; the full
+// label and the counts are in the tooltip. Quiet for long: a warning, nothing more.
 function activityCell(t) {
   const p = t.progress;
   if (t.state !== 'running') return '<span class="sub">waiting for a slot</span>';
   if (!p) return '<span class="sub">–</span>';
   const at = p.lastActivityAt ?? t.startedAt;
-  const counts = [p.filesEdited && plural(p.filesEdited, 'file') + ' edited', p.commands && plural(p.commands, 'command')].filter(Boolean).join(' · ');
-  return `<span data-activity="${esc(at)}" data-quiet="${esc(p.quietSeconds)}">${activityAgo(at, p.quietSeconds)}</span>` +
-    `${p.lastActivity?.what ? ` <span class="sub">${esc(p.lastActivity.what)}</span>` : p.lastActivityAt ? '' : ' <span class="sub">no activity yet</span>'}` +
-    (counts ? `<div class="sub">${counts}</div>` : '');
+  const what = p.lastActivity?.what ?? (p.lastActivityAt ? '' : 'starting…');
+  const counts = [plural(p.steps, 'step'), plural(p.filesEdited, 'file') + ' edited', plural(p.commands, 'command')].join(' · ');
+  return `<div class="activity" title="${esc([p.lastActivity?.what, counts].filter(Boolean).join('\n'))}">` +
+    `<span data-activity="${esc(at)}" data-quiet="${esc(p.quietSeconds)}">${activityAgo(at, p.quietSeconds)}</span>` +
+    `<span class="what sub">${esc(what)}</span></div>`;
 }
 function activityAgo(at, quietSeconds) {
   const ms = Math.max(0, Date.now() - Date.parse(at));
+  const ago = ms < 60000 ? `${Math.floor(ms / 1000)} s ago` : `${fmtDur(ms)} ago`;
   return ms >= quietSeconds * 1000
     ? `<span class="warn" title="No activity for a while: it may be stuck, or thinking for a long time"><span style="color:var(--warning)">▲</span> quiet for ${fmtDur(ms)}</span>`
-    : `${fmtDur(ms)} ago`;
+    : `<strong>${ago}</strong>`;
 }
 
 function renderLive(s) {
@@ -702,6 +707,19 @@ setInterval(() => document.querySelectorAll('[data-activity]').forEach((el) => (
 syncButtons();
 load();
 setInterval(load, 15000);
+// The Now section on its own, every 2 s while the page is in view: what a task is doing changes faster
+// than the rest of the page.
+async function loadLive() {
+  if (document.hidden || !last) return;
+  try {
+    const live = await getJson('/api/live');
+    Object.assign(last, { queue: live.queue, activeTasks: live.activeTasks }); // a resize redraws the latest
+    renderLive(live);
+  } catch {
+    // the full refresh reports problems
+  }
+}
+setInterval(loadLive, 2000);
 </script>
 </body>
 </html>

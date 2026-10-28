@@ -344,6 +344,10 @@ test('the dashboard survives a malformed request, bad records, and uppercase Hos
     // Without the token (another account on this Mac reaching 127.0.0.1) the data API refuses.
     assert.equal((await get('/api/summary', undefined, null)).status, 401);
     assert.equal((await get('/api/tasks?page=1', undefined, null)).status, 401);
+    assert.equal((await get('/api/live', undefined, null)).status, 401, 'the live view needs the token too');
+    const live = await get('/api/live');
+    assert.equal(live.status, 200, 'a damaged task file does not break /api/live');
+    assert.deepEqual(Object.keys(JSON.parse(live.body)).sort(), ['activeTasks', 'generatedAt', 'queue']);
     const tasks = await get('/api/tasks?page=9&size=25&q=%00%ff');
     assert.equal(tasks.status, 200, 'odd paging and search input is answered, not a crash');
     assert.deepEqual(Object.keys(JSON.parse(tasks.body)).sort(), ['items', 'page', 'pages', 'size', 'total']);

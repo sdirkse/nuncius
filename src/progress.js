@@ -20,20 +20,27 @@ function rel(p, base) {
   return base && s.startsWith(`${base}/`) ? s.slice(base.length + 1) : s;
 }
 
+// "Shell: <command>", with a shell wrapper (`/bin/zsh -lc "rg -n x"`, Codex runs every command so) taken off.
+export function shellLabel(command) {
+  const c = String(command ?? '').trim();
+  const m = /^(?:\S*\/)?(?:ba|z|da|k)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(c);
+  return `Shell: ${m ? m[2] : c}`;
+}
+
 const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
 
 // One parsed event -> the activities in it: { kind, what, file? }. Kinds edit, command, read and tool are steps;
-// done (a step finished), message and thinking only show the target is busy.
+// message and thinking show the target is busy; done (a step finished) has no label: the step it ends stays shown.
 function claudeActivities(ev, base) {
-  if (ev.type !== 'assistant') return ev.type === 'user' ? [{ kind: 'done', what: 'tool finished' }] : [];
+  if (ev.type !== 'assistant') return ev.type === 'user' ? [{ kind: 'done' }] : [];
   const out = [];
   for (const c of ev.message?.content ?? []) {
     if (c?.type === 'tool_use') {
       const name = String(c.name ?? 'tool');
       const input = c.input ?? {};
       if (EDIT_TOOLS.has(name)) out.push({ kind: 'edit', what: `${name} ${rel(input.file_path ?? input.notebook_path, base)}`, file: rel(input.file_path ?? input.notebook_path, base) });
-      else if (name === 'Bash') out.push({ kind: 'command', what: `Shell: ${input.command ?? ''}` });
+      else if (name === 'Bash') out.push({ kind: 'command', what: shellLabel(input.command) });
       else if (READ_TOOLS.has(name)) out.push({ kind: 'read', what: `${name} ${rel(input.file_path ?? input.pattern ?? input.path, base)}` });
       else out.push({ kind: 'tool', what: name });
     } else if (c?.type === 'text') out.push({ kind: 'message', what: 'writing a reply' });
@@ -47,7 +54,7 @@ function codexActivities(ev, base) {
   if (ev.type !== 'item.started' && ev.type !== 'item.completed') return [];
   const it = ev.item ?? {};
   const started = ev.type === 'item.started';
-  if (it.type === 'command_execution') return started ? [{ kind: 'command', what: `Shell: ${it.command ?? ''}` }] : [{ kind: 'done', what: `Shell finished: ${it.command ?? ''}` }];
+  if (it.type === 'command_execution') return started ? [{ kind: 'command', what: shellLabel(it.command) }] : [{ kind: 'done' }];
   if (it.type === 'file_change' && !started) return (it.changes ?? []).map((c) => ({ kind: 'edit', what: `${c?.kind ?? 'edit'} ${rel(c?.path, base)}`, file: rel(c?.path, base) }));
   if (it.type === 'reasoning') return [{ kind: 'thinking', what: 'thinking' }];
   if (it.type === 'agent_message') return [{ kind: 'message', what: 'writing a reply' }];
@@ -67,9 +74,9 @@ function cursorActivities(ev, base) {
   if (!key) return [];
   const args = ev.tool_call[key]?.args ?? {};
   const name = key.replace(/ToolCall$/, '');
-  if (ev.subtype !== 'started') return [{ kind: 'done', what: `${name} finished` }];
+  if (ev.subtype !== 'started') return [{ kind: 'done' }];
   if (CURSOR_EDIT.has(key)) return [{ kind: 'edit', what: `${name} ${rel(args.path, base)}`, file: rel(args.path, base) }];
-  if (key === 'shellToolCall') return [{ kind: 'command', what: `Shell: ${args.command ?? ''}` }];
+  if (key === 'shellToolCall') return [{ kind: 'command', what: shellLabel(args.command) }];
   if (CURSOR_READ.has(key)) return [{ kind: 'read', what: `${name} ${rel(args.path ?? args.pattern ?? args.globPattern, base)}` }];
   return [{ kind: 'tool', what: name }];
 }
