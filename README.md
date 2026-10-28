@@ -128,6 +128,8 @@ Tools:
 | `wait_task` | Waits up to `timeout_seconds` (max 600) and returns the state and result. |
 | `usage` | Today's usage, usage per project, Codex and Claude limits (or why Claude's are missing), budgets and the queue. |
 
+Progress: while a task runs, `get_task` and `wait_task` return a `progress` field read from the target's own event stream (Claude's and Cursor's `stream-json`, Codex's `--json`): elapsed time and the timeout, how long ago the target last did anything and what (`lastActivity`), and counts of steps, edited files and commands. After 5 minutes without any event, `quiet` is true: the task may be stuck, or the model may be thinking for a long time. Nuncius only reports this; it stops a task only at the timeout. The activity text comes from the target, so it is cleaned and shortened, and kept out of the `next` hint. The progress stays on the task after it ends, and a task that times out keeps its event stream in `~/.nuncius/runs/<id>.out`.
+
 Tasks run in detached worker processes that keep their state in `~/.nuncius/tasks/`, so they survive an MCP server restart. They queue FIFO under `concurrency.perTarget` (default 2) and `concurrency.total` (default 4), at most `concurrency.maxQueued` (default 20) wait, and they are killed after `tasks.timeoutSeconds` (default 1800). A prompt can be at most 1 MB. Queued and running tasks already count against the daily run caps, so tasks submitted at the same moment (even from several MCP servers) cannot pass a cap together. A target cannot signal any process outside its sandbox, so it cannot kill the worker that enforces its timeout and records its usage; if a worker dies anyway, the next submit records the run and stops the target it left behind. A target always runs with `NUNCIUS_DEPTH=1`. A Nuncius call is refused when that variable is set to anything other than `0`, or when a running Nuncius worker is among its parent processes, so a target cannot escape the guard by unsetting the variable. Nuncius chains cannot loop.
 
 ## Isolation: worktree and sandbox
@@ -192,7 +194,7 @@ Open the full URL it prints: it ends in `#t=<token>`, a random token for this ru
 It refreshes every 15 seconds and filters by period (7, 30 or 90 days) and by project. It shows:
 - **Subscription limits:** Codex and Claude, 5-hour and weekly. The meter shows where Nuncius starts refusing tasks. If Claude's limits have not been recorded yet, it points to `nuncius install-statusline`. Cursor exposes no subscription usage, so its tile shows Nuncius's own daily caps for Cursor (runs, tokens, agent minutes) and how close today is to the nearest one.
 - **Today:** tokens and runs per tool, against the daily token caps when set.
-- **Now:** running and queued tasks, with tool, project, agent and a live duration.
+- **Now:** running and queued tasks, with tool, project, agent, a live duration against the timeout, and the last activity (how long ago, and what), marked when a task has been quiet for 5 minutes.
 - **Tokens per day**, Codex, Claude and Cursor stacked.
 - **Tokens per project**, per tool, with the number of failed tasks and the last task; the most recently active project first.
 - **Token split:** input (of which cached) and output tokens per tool for the period.
@@ -229,7 +231,7 @@ nuncius cleanup [--days 7] [--dry-run]  # remove applied (also automatic) and ol
 nuncius dashboard [--port 7317]         # http://localhost:7317
 ```
 
-- stdout carries only the target's final answer. stderr gets one usage line, for example `[nuncius] codex · unbound · 42.1s · 12.800 tokens · 5h 34% · week 12%`.
+- stdout carries only the target's final answer. While the task runs, stderr shows what the target does, one line per step (`[nuncius] 9 s edit calc.py`, `[nuncius] 11 s Shell: npm test`). At the end stderr gets one usage line, for example `[nuncius] codex · unbound · 42.1s · 12.800 tokens · 5h 34% · week 12%`.
 - Extra target arguments after `--` are allowlisted: `--model` / `-m` for both targets, plus `-c model_reasoning_effort|model_reasoning_summary|model_verbosity=<value>` for Codex. Anything that could touch the sandbox, approvals or config is refused with exit code 2. The prompt is always passed after `--`, so a prompt starting with `-` cannot become a flag.
 - The CLI uses the same queue, worktree and sandbox as MCP callers: it waits for a slot, then runs the task in-process, and prints `review` / `apply` lines when there are changes.
 - `--force` runs a task even when a budget is exceeded, but only when you type it in a terminal yourself: Nuncius refuses it when Claude Code's `CLAUDECODE` marker is set or an agent CLI (`claude`, `codex`, `cursor-agent`) is among its parent processes, and the Claude Code hook also refuses `nuncius ... --force` (also wrapped in `script` or `unbuffer`). This keeps well-behaved agents from overriding budgets. It is a guardrail, not a security boundary: the calling agent runs as you and could edit `~/.nuncius/config.json`. The targets Nuncius starts are sandboxed and cannot call Nuncius at all.

@@ -1,21 +1,26 @@
 import { run } from '../spawn.js';
 import { num, tokens } from '../num.js';
 
-// `cursor-agent -p --output-format json` prints one JSON object on success:
+// `cursor-agent -p --output-format stream-json` prints one JSON object per line while it works
+// (system, user, assistant, thinking, tool_call started/completed) and ends with the type "result"
+// object that plain json prints alone:
 // { type, subtype, is_error, duration_ms, duration_api_ms, result, session_id, request_id,
 //   usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } } (usage since 2026-10).
 export function parseCursorJson(stdout) {
-  const text = stdout.trim();
-  const start = text.lastIndexOf('\n{');
-  const candidate = start >= 0 ? text.slice(start + 1) : text;
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    return null;
+  const lines = stdout.trim().split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].startsWith('{')) continue;
+    try {
+      const o = JSON.parse(lines[i]);
+      if (o?.type === 'result') return o;
+    } catch {
+      // not JSON
+    }
   }
+  return null;
 }
 
-export async function runCursor({ bin, prompt, extraArgs, cwd, env, timeoutMs, echoStderr, wrap, onSpawn }) {
+export async function runCursor({ bin, prompt, extraArgs, cwd, env, timeoutMs, echoStderr, wrap, onSpawn, onLine }) {
   // In print mode Cursor only proposes edits unless --force is given. The nuncius adds it itself
   // (callers cannot) because the outer sandbox (wrap) confines writes to the worktree.
   // Network for Cursor and its commands goes through the nuncius's egress proxy.
@@ -23,9 +28,11 @@ export async function runCursor({ bin, prompt, extraArgs, cwd, env, timeoutMs, e
   // --disable-auto-update (a hidden option, in the CLI since at least 2026.10.16): without it Cursor
   // checks for a new version two seconds in, downloads it into the task's throw-away HOME, and starts
   // a detached cleanup process that outlives the task. A task runs the version the user installed.
-  const args = ['-p', '--output-format', 'json', '--force', '--disable-auto-update', ...extraArgs, '--', prompt];
+  // stream-json, not json: nuncius sees what Cursor does while it works (src/progress.js), and a run
+  // that times out still leaves a record of its steps in runs/<id>.out.
+  const args = ['-p', '--output-format', 'stream-json', '--force', '--disable-auto-update', ...extraArgs, '--', prompt];
   const cmd = wrap ? wrap(bin, args) : { bin, args };
-  const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn });
+  const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn, onLine });
   const obj = parseCursorJson(res.stdout);
   const ok = res.code === 0 && !!obj && !obj.is_error;
   return {

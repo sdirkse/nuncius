@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Stand-in for `cursor-agent -p --output-format json`.
+// Stand-in for `cursor-agent -p --output-format stream-json` (events while it works, the result last).
 const args = process.argv.slice(2);
 if (args[0] === '--version') {
   console.log(`${process.env.FAKE_VERSION ?? '2026.10.16-e3cb207'}`);
@@ -24,6 +24,13 @@ for (const [, abs] of prompt.matchAll(/READ:(\S+)/g)) {
   try { fsx.readFileSync(abs); notes.push(`read ${abs} OK`); } catch (e) { notes.push(`read ${abs} ${e.code}`); }
 }
 if (process.env.FAKE_PROMPT_FILE) fsx.writeFileSync(process.env.FAKE_PROMPT_FILE, fullPrompt);
+// stream-json: what it did so far, before any SLEEP, so a running task already shows progress.
+const stream = args.includes('stream-json');
+const event = (o) => stream && console.log(JSON.stringify(o));
+event({ type: 'system', subtype: 'init', model: 'fake', session_id: 'c-123' });
+event({ type: 'tool_call', subtype: 'started', call_id: 't1', tool_call: { shellToolCall: { args: { command: 'ls -la' } } } });
+event({ type: 'tool_call', subtype: 'completed', call_id: 't1', tool_call: { shellToolCall: { args: { command: 'ls -la' }, result: { success: {} } } } });
+for (const [, rel] of prompt.matchAll(/WRITE:(\S+)/g)) event({ type: 'tool_call', subtype: 'started', call_id: `w-${rel}`, tool_call: { editToolCall: { args: { path: `${process.cwd()}/${rel}` } } } });
 // "SLEEP:<ms>" anywhere in the prompt makes the fake take that long, to exercise queueing and timeouts.
 const sleepMs = Number(/SLEEP:(\d+)/.exec(prompt)?.[1] ?? 0);
 if (sleepMs) await new Promise((r) => setTimeout(r, sleepMs));

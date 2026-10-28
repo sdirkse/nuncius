@@ -70,6 +70,7 @@ test('cursor run logs duration and enforces runs per day', () => {
   const r = aiRun(['cursor', '--project', 'site', 'refactor']);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, 'Cursor did: refactor\n');
+  assert.match(r.stderr, /^\[nuncius\] \d+ s Shell: ls -la$/m, 'the CLI prints what the target does as it happens');
   assert.equal(log()[0].usage.durationMs, 95000);
   assert.equal(log()[0].usage.totalTokens, 4200, 'input + cache read + output');
   assert.equal(aiRun(['cursor', 'again']).status, 0);
@@ -153,7 +154,7 @@ test('prompt that looks like a flag is passed after --', () => {
   assert.ok(args.at(-1).endsWith('Task:\n--dangerously-bypass-approvals-and-sandbox'));
   aiRun(['cursor', '--yolo'], { FAKE_ARGS_FILE: argsFile });
   args = JSON.parse(fs.readFileSync(argsFile, 'utf8'));
-  assert.deepEqual(args.slice(0, -1), ['-p', '--output-format', 'json', '--force', '--disable-auto-update', '--']);
+  assert.deepEqual(args.slice(0, -1), ['-p', '--output-format', 'stream-json', '--force', '--disable-auto-update', '--']);
   assert.ok(args.at(-1).endsWith('Task:\n--yolo'));
 });
 

@@ -18,6 +18,7 @@ import { latestCodexLimits } from './summary.js';
 import { collectEvidence } from './evidence.js';
 import { clampRunUsage } from './num.js';
 import { stopStrays } from './strays.js';
+import { createProgress, progressView, shortDuration } from './progress.js';
 
 // A task lives in tasks/<id>.json and moves queued → running → done | failed | timeout.
 // `refused` is terminal and set before anything runs. Workers are separate processes, so tasks
@@ -27,6 +28,9 @@ export const TERMINAL = new Set(['done', 'failed', 'timeout', 'refused']);
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NUNCIUS_BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'nuncius.js');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A running task's progress is written to its file at most this often.
+const PROGRESS_SAVE_MS = 3000;
+const PROGRESS_BATCH_MS = 250;
 
 export const tasksDir = () => path.join(dataDir(), 'tasks');
 
@@ -688,6 +692,28 @@ async function runTask(id, { echoStderr }, ctx) {
   ensureCanary(); // must exist before the target starts, so a nested call sees it denied
 
   ctx.startedAt = Date.now();
+  // What the target is doing, from its own event stream: kept in the task file (at most every few
+  // seconds, under the queue lock so it never overwrites a state the reaper set) and, from the CLI,
+  // printed as it happens.
+  const progress = createProgress({
+    target: task.target, base: task.worktree.path, timeoutSeconds: taskTimeoutSeconds(config),
+    onActivity: echoStderr ? (a) => process.stderr.write(`[nuncius] ${shortDuration((Date.now() - ctx.startedAt) / 1000)} ${a.what}\n`) : undefined,
+  });
+  // Saved a moment after an event, so a burst of them lands in one write, and then at most every few seconds.
+  let progressSaved = 0;
+  let progressTimer = null;
+  const saveProgress = () => {
+    if (progressTimer) return;
+    progressTimer = setTimeout(() => {
+      progressTimer = null;
+      progressSaved = Date.now();
+      withLock(() => {
+        if (readTask(id)?.state === 'running') updateTask(id, { progress: progress.snapshot() });
+      }).catch(() => {});
+    }, Math.max(PROGRESS_BATCH_MS, progressSaved + PROGRESS_SAVE_MS - Date.now()));
+    progressTimer.unref();
+  };
+  updateTask(id, { progress: progress.snapshot() });
   let proxy = null;
   const runtimeDirs = [];
   let sealed = new Map();
@@ -756,12 +782,16 @@ async function runTask(id, { echoStderr }, ctx) {
         updateTask(id, { targetProcess: { pid, bin, dirs: [task.worktree.path, ...runtimeDirs] } });
       },
       echoStderr,
+      onLine: (line) => {
+        if (progress.feed(line)) saveProgress();
+      },
       wrap: sandboxWrapper({ worktree: task.worktree.path, callerRepo: task.worktree.root, target: task.target, proxyPort: proxy.port, runtimeDirs, config: config.sandbox, runCwd: task.worktree.runCwd, targetBin: bin, gitDir: commonDir,
         ...(account ? { account, accountEnv: env, secrets: login.secrets, claudeTemp } : {}) }),
     }).then(
       (r) => r,
       (err) => ({ ok: false, error: String(err), rawStdout: '', exitCode: 1, usage: null, limits: null }),
     );
+    clearTimeout(progressTimer); // the final write below carries the last progress
     // As a task account: stop everything it started (however it detached), then hand back what it
     // wrote (it may have made files unreadable to the user) before nuncius reads or commits any of it.
     if (account) {
@@ -831,6 +861,7 @@ async function runTask(id, { echoStderr }, ctx) {
     worktree,
     egress,
     evidence,
+    progress: progress.snapshot(),
     ...(warnings.length ? { warnings } : {}),
     state: commitError ? 'failed' : res.timedOut ? 'timeout' : res.ok ? 'done' : 'failed',
     finishedAt: new Date().toISOString(),
@@ -849,6 +880,14 @@ export async function waitForTask(id, seconds, { signal } = {}) {
   }
 }
 
+function runningNote(p) {
+  if (!p) return '';
+  const of = p.timeoutSeconds ? ` of at most ${shortDuration(p.timeoutSeconds)}` : '';
+  const last = p.lastActivity.secondsAgo == null ? '' : p.lastActivity.what || p.steps ? `, last activity ${shortDuration(p.lastActivity.secondsAgo)} ago` : ', no activity reported yet';
+  const quiet = p.quiet ? `. No activity for ${shortDuration(p.lastActivity.secondsAgo)}: it may be stuck, or thinking for a long time` : '';
+  return `: ${shortDuration(p.elapsedSeconds)}${of}${last}${quiet}`;
+}
+
 // What callers see: no raw output, prompt shortened, a hint when it is still going.
 export function publicTask(task) {
   if (!task) return null;
@@ -862,6 +901,8 @@ export function publicTask(task) {
   // Hosts the target tried to reach but the proxy refused: useful when a task fails for lack of network.
   if (task.egress?.denied?.length) out.blockedHosts = task.egress.denied;
   if (task.result) out.result = result;
+  const progress = progressView(task.progress, { state: task.state, startedAt: task.startedAt, finishedAt: task.finishedAt, wallMs: task.wallMs });
+  if (progress) out.progress = progress;
   if (task.warnings?.length) out.warnings = task.warnings;
   if (task.evidence) out.modelsReported = { models: task.evidence.models, source: task.evidence.source, files: task.evidence.files?.length ?? 0 };
   const wt = task.worktree;
@@ -881,6 +922,7 @@ export function publicTask(task) {
     if ((task.state === 'failed' || task.state === 'timeout') && !wt.removed && !wt.changed)
       out.next = `The worktree is kept for inspection at ${wt.path}. \`nuncius cleanup\` later saves any changes in it on ${wt.branch} and removes the checkout.`;
   }
-  if (!TERMINAL.has(task.state)) out.next = `Still ${task.state}. Call wait_task with id "${task.id}" to keep waiting, or get_task to check without waiting.`;
+  // Times and counts only: the activity label is target-controlled and this field reads as instructions.
+  if (!TERMINAL.has(task.state)) out.next = `Still ${task.state}${runningNote(progress)}. Call wait_task with id "${task.id}" to keep waiting, or get_task to check without waiting.`;
   return out;
 }

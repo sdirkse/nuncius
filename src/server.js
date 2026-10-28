@@ -11,6 +11,7 @@ import { openWorktrees, autoCleanup } from './cleanup.js';
 import { claudeLimitsHint, readBridgeSeen } from './claude-limits.js';
 import { targetStatus } from './targets.js';
 import { statuslineInstalled } from './statusline.js';
+import { progressView, QUIET_SECONDS } from './progress.js';
 
 const PAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dashboard', 'index.html');
 
@@ -33,7 +34,9 @@ export function buildSummary({ days = 30, project = '' } = {}) {
   // Live tasks are shown for every project: the queue is shared.
   s.activeTasks = listTasks()
     .filter((t) => !TERMINAL.has(t.state))
-    .map((t) => ({ id: t.id, state: t.state, target: t.target, model: t.model, project: t.project, agent: t.agent, createdAt: t.createdAt, startedAt: t.startedAt ?? null, network: !!t.network, promptPreview: String(t.prompt ?? '').slice(0, 160) }));
+    .map((t) => ({ id: t.id, state: t.state, target: t.target, model: t.model, project: t.project, agent: t.agent, createdAt: t.createdAt, startedAt: t.startedAt ?? null, network: !!t.network, promptPreview: String(t.prompt ?? '').slice(0, 160),
+      // The page counts the times on itself between polls, so it gets the moments, not just the view.
+      progress: t.state === 'running' && t.progress ? { ...progressView(t.progress, { state: t.state, startedAt: t.startedAt }), lastActivityAt: t.progress.lastActivityAt ?? null, quietSeconds: QUIET_SECONDS } : null }));
   s.worktrees = openWorktrees()
     .filter((w) => !project || w.project === project)
     .map((w) => ({ ...w, files: w.files?.length ?? 0 }))
