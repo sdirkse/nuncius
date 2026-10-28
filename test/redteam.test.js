@@ -348,6 +348,15 @@ test('the dashboard survives a malformed request, bad records, and uppercase Hos
     const live = await get('/api/live');
     assert.equal(live.status, 200, 'a damaged task file does not break /api/live');
     assert.deepEqual(Object.keys(JSON.parse(live.body)).sort(), ['activeTasks', 'generatedAt', 'queue']);
+    // A task's activity log comes back cleaned, newest first.
+    const logged = '11111111-1111-4111-8111-111111111111';
+    fs.writeFileSync(path.join(tasksDir, `${logged}.json`), JSON.stringify({ id: logged, state: 'done', target: 'cursor', prompt: 'p', startedAt: '2026-10-28T08:00:00.000Z', finishedAt: '2026-10-28T08:01:00.000Z', wallMs: 60000,
+      progress: { startedAt: '2026-10-28T08:00:00.000Z', lastActivityAt: '2026-10-28T08:00:50.000Z', lastActivity: 'edit a.js', steps: 2, filesEdited: 1, commands: 1, logged: 2,
+        recent: [{ s: 5, kind: 'command', what: 'Shell: ls' }, { s: 50, kind: 'edit', what: 'edit a.js\u202e' }] } }));
+    const detail = JSON.parse((await get(`/api/task?id=${logged}`)).body);
+    assert.deepEqual(detail.activity.items, [{ s: 50, kind: 'edit', what: 'edit a.js' }, { s: 5, kind: 'command', what: 'Shell: ls' }]);
+    assert.equal(detail.activity.filesEdited, 1);
+    assert.equal(detail.activity.elapsedSeconds, 60);
     const tasks = await get('/api/tasks?page=9&size=25&q=%00%ff');
     assert.equal(tasks.status, 200, 'odd paging and search input is answered, not a crash');
     assert.deepEqual(Object.keys(JSON.parse(tasks.body)).sort(), ['items', 'page', 'pages', 'size', 'total']);

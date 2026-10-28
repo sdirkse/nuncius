@@ -11,7 +11,7 @@ import { openWorktrees, autoCleanup } from './cleanup.js';
 import { claudeLimitsHint, readBridgeSeen } from './claude-limits.js';
 import { targetStatus } from './targets.js';
 import { statuslineInstalled } from './statusline.js';
-import { progressView, QUIET_SECONDS } from './progress.js';
+import { progressView, activityLog, QUIET_SECONDS } from './progress.js';
 
 const PAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dashboard', 'index.html');
 
@@ -70,6 +70,8 @@ export function taskDetail(id) {
     prompt: t.prompt, output: t.result?.output ?? '', error: t.result?.error ?? null, usage: t.result?.usage ?? null,
     modelsReported: t.evidence?.models ?? [], blockedHosts: t.egress?.denied ?? [], warnings: t.warnings ?? [],
     worktree: wt ? { branch: wt.branch, changed: wt.changed ?? null, removed: !!wt.removed, files: wt.files ?? [], sensitiveFiles: wt.sensitiveFiles ?? [], review: wt.review ?? null, apply: wt.apply ?? null } : null,
+    // What the target did, newest first (tasks from before progress was recorded have none).
+    activity: t.progress ? { ...activityLog(t.progress), ...progressView(t.progress, { state: t.state, startedAt: t.startedAt, finishedAt: t.finishedAt, wallMs: t.wallMs }) } : null,
   };
 }
 

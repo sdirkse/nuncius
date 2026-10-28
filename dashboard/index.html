@@ -84,8 +84,21 @@
   .prompt { color: var(--ink-2); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .empty { color: var(--muted); padding: 20px 8px; text-align: center; }
   .err { background: var(--surface); border: 1px solid var(--critical); border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; display: none; }
-  .activity { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 280px; }
-  .activity .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; }
+  /* The Now table keeps its shape while tasks report activity: fixed columns, one line per cell. */
+  .live-table { table-layout: fixed; width: 100%; min-width: 980px; font-variant-numeric: tabular-nums; }
+  .live-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .live-table td .linkish { max-width: none; }
+  .activity { display: flex; flex-direction: column; gap: 2px; min-width: 0; cursor: pointer; }
+  .activity:hover .what, .activity:focus-visible .what { color: var(--ink); text-decoration: underline; }
+  .activity .what, .alog .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .alog-head { display: flex; align-items: baseline; gap: 12px; margin: 12px 0 0; }
+  .alog-head h3 { margin: 0; }
+  .alog { list-style: none; margin: 4px 0 12px; padding: 4px 0; max-height: 40vh; overflow: auto; background: var(--page); border: 1px solid var(--grid); border-radius: 8px; font-variant-numeric: tabular-nums; }
+  .alog li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; padding: 2px 12px; font-size: 12px; }
+  .alog li .at { color: var(--muted); text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .alog li.soft .what { color: var(--muted); font-style: italic; }
+  .alog li.edit .what { color: var(--ink); font-weight: 600; }
+  .alog-new { border: 1px solid var(--grid); background: var(--surface); border-radius: 999px; font-size: 12px; padding: 1px 10px; cursor: pointer; color: var(--ink-2); }
   .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--track); color: var(--ink-2); white-space: nowrap; }
   .copy { border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); border-radius: 6px; font: 12px inherit; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
   .copy:hover { color: var(--ink); }
@@ -345,7 +358,7 @@ function activityCell(t) {
   const at = p.lastActivityAt ?? t.startedAt;
   const what = p.lastActivity?.what ?? (p.lastActivityAt ? '' : 'starting…');
   const counts = [plural(p.steps, 'step'), plural(p.filesEdited, 'file') + ' edited', plural(p.commands, 'command')].join(' · ');
-  return `<div class="activity" title="${esc([p.lastActivity?.what, counts].filter(Boolean).join('\n'))}">` +
+  return `<div class="activity" role="button" tabindex="0" data-task="${esc(t.id)}" title="${esc([p.lastActivity?.what, counts, 'Click for the activity log'].filter(Boolean).join('\n'))}">` +
     `<span data-activity="${esc(at)}" data-quiet="${esc(p.quietSeconds)}">${activityAgo(at, p.quietSeconds)}</span>` +
     `<span class="what sub">${esc(what)}</span></div>`;
 }
@@ -363,13 +376,14 @@ function renderLive(s) {
   const head = `<div class="live-head"><span class="big">${q.running}</span><span class="sub">running (max ${q.limits.total}, ${q.limits.perTarget} per tool)</span>
     <span class="big">${q.queued}</span><span class="sub">queued</span>${per ? `<span class="sub">${per}</span>` : ''}</div>`;
   if (!tasks.length) { document.getElementById('live').innerHTML = head + `<div class="empty">Nothing is running.</div>`; return; }
-  document.getElementById('live').innerHTML = head + `<div class="scroll"><table><thead><tr><th>State</th><th>Tool</th><th>Project</th><th>Agent</th><th class="num">Duration</th><th>Last activity</th><th>Task</th></tr></thead><tbody>` +
+  document.getElementById('live').innerHTML = head + `<div class="scroll"><table class="live-table"><colgroup><col style="width:104px"><col style="width:170px"><col style="width:140px"><col style="width:140px"><col style="width:140px"><col style="width:300px"><col></colgroup>` +
+    `<thead><tr><th>State</th><th>Tool</th><th>Project</th><th>Agent</th><th class="num">Duration</th><th>Last activity</th><th>Task</th></tr></thead><tbody>` +
     tasks.map((t) => {
       const since = t.startedAt ?? t.createdAt, p = t.progress;
       return `<tr>
         <td><span class="pill">${t.state === 'running' ? '● running' : '◌ queued'}</span>${t.network ? ' <span class="pill" title="May reach package registries">network</span>' : ''}</td>
-        <td>${toolName(t.target)}${t.model ? ` <span class="sub">${esc(t.model)}</span>` : ''}</td>
-        <td>${esc(t.project)}</td><td class="sub">${esc(t.agent)}</td>
+        <td title="${esc([TOOLS[t.target], t.model].filter(Boolean).join(' · '))}">${toolName(t.target)}${t.model ? ` <span class="sub">${esc(t.model)}</span>` : ''}</td>
+        <td title="${esc(t.project)}">${esc(t.project)}</td><td class="sub" title="${esc(t.agent)}">${esc(t.agent)}</td>
         <td class="num"><span data-since="${esc(since)}">${fmtDur(Date.now() - Date.parse(since))}</span>${p?.timeoutSeconds ? `<span class="sub"> / ${fmtDur(p.timeoutSeconds * 1000)}</span>` : ''}</td>
         <td>${activityCell(t)}</td>
         <td>${promptButton(t.id, t.promptPreview)}</td></tr>`;
@@ -625,6 +639,47 @@ async function load() {
 }
 
 // The detail view: everything shown as text, the target's answer included (it is target output).
+// The task window's activity log: newest first, times from the task's start (they do not tick).
+// While the task runs it fills in every 2 s; when you have scrolled down to read, it waits and offers
+// the new steps instead of moving the list under you.
+const KIND_CLASS = { edit: 'edit', thinking: 'soft', message: 'soft' };
+const fmtAt = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, '0'); return h ? `+${h}:${String(m).padStart(2, '0')}:${sec}` : `+${m}:${sec}`; };
+function activityItems(a) {
+  if (!a.items.length) return `<li><span></span><span class="what sub">${a.lastActivity?.secondsAgo == null ? 'Nothing reported yet.' : 'No steps reported yet.'}</span></li>`;
+  return a.items.map((e) => `<li class="${KIND_CLASS[e.kind] ?? ''}"><span class="at">${fmtAt(e.s)}</span><span class="what" title="${esc(e.what)}">${esc(e.what)}</span></li>`).join('') +
+    (a.logged > a.items.length ? `<li><span></span><span class="sub">… ${plural(a.logged - a.items.length, 'earlier step')} not kept</span></li>` : '');
+}
+const activityCounts = (a) => `${plural(a.steps, 'step')} · ${plural(a.filesEdited, 'file')} edited · ${plural(a.commands, 'command')}`;
+function activitySection(t) {
+  const a = t.activity;
+  if (!a) return '';
+  return `<div class="alog-head"><h3>Activity</h3><span class="sub" id="alog-counts">${activityCounts(a)}</span><button class="alog-new" id="alog-new" hidden></button></div>
+    <ol class="alog" id="alog" data-logged="${a.logged}">${activityItems(a)}</ol>`;
+}
+let activityTimer = null;
+function followTask(id) {
+  clearInterval(activityTimer);
+  activityTimer = setInterval(async () => {
+    const dlg = document.getElementById('task');
+    if (!dlg.open || document.hidden) return;
+    let t;
+    try { t = await getJson(`/api/task?${new URLSearchParams({ id })}`); } catch { return; }
+    if (t.state !== 'running' && t.state !== 'queued') { clearInterval(activityTimer); openTask(id); return; } // finished: show the answer
+    if (!document.getElementById('alog')) { if (t.activity) openTask(id); return; } // it started reporting
+    updateActivity(t.activity);
+  }, 2000);
+}
+function updateActivity(a) {
+  const list = document.getElementById('alog');
+  if (!list || !a) return;
+  document.getElementById('alog-counts').textContent = activityCounts(a);
+  const fresh = a.logged - Number(list.dataset.logged);
+  if (fresh <= 0) return;
+  const show = () => { list.innerHTML = activityItems(a); list.dataset.logged = a.logged; list.scrollTop = 0; document.getElementById('alog-new').hidden = true; };
+  if (list.scrollTop < 8) show();
+  else { const b = document.getElementById('alog-new'); b.textContent = `${plural(fresh, 'new step')} ↑`; b.hidden = false; b.onclick = show; }
+}
+
 async function openTask(id) {
   const dlg = document.getElementById('task'), body = document.getElementById('task-body');
   document.getElementById('task-title').textContent = 'Task';
@@ -648,15 +703,17 @@ async function openTask(id) {
       <dt>State</dt><dd>${esc(t.state)}${t.error ? ` · <span class="fail">${esc(t.error)}</span>` : ''}</dd>
       <dt>Model</dt><dd>${esc(models)}</dd>
       <dt>Agent</dt><dd>${esc(t.agent)}${t.caller ? ` <span class="sub">via ${esc(t.caller)}</span>` : ''}</dd>
-      <dt>Duration</dt><dd>${t.wallMs != null ? fmtDur(t.wallMs) : '–'}</dd>
+      <dt>Duration</dt><dd>${t.wallMs != null ? fmtDur(t.wallMs) : t.startedAt ? `<span data-since="${esc(t.startedAt)}">${fmtDur(Date.now() - Date.parse(t.startedAt))}</span> <span class="sub">so far</span>` : '–'}</dd>
       <dt>Tokens</dt><dd>${u && u.totalTokens != null ? `${nf.format(u.totalTokens)} <span class="sub">= ${nf.format(u.inputTokens ?? 0)} input (${nf.format(u.cachedInputTokens ?? 0)} cached) + ${nf.format(u.outputTokens ?? 0)} output</span>` : '–'}</dd>
       <dt>Network</dt><dd>${t.network ? 'package registries allowed' : 'own API only'}${t.blockedHosts.length ? ` · <span class="warn">blocked: ${esc(t.blockedHosts.join(', '))}</span>` : ''}</dd>
       ${wt ? `<dt>Worktree</dt><dd><code>${esc(wt.branch)}</code> ${wt.removed ? '<span class="sub">removed</span>' : ''} ${wt.files.length ? `· ${plural(wt.files.length, 'file')} changed` : ''}${wt.sensitiveFiles.length ? ` · <span class="warn">▲ sensitive: ${esc(wt.sensitiveFiles.join(', '))}</span>` : ''}</dd>` : ''}
     </dl>
     ${t.warnings.length ? `<h3>Warnings</h3><pre>${esc(t.warnings.join('\n'))}</pre>` : ''}
+    ${activitySection(t)}
     <h3>Prompt</h3><pre>${esc(t.prompt)}</pre>
     <h3>Answer</h3><pre>${t.output ? esc(t.output) : '<span class="sub">(none)</span>'}</pre>
     ${wt?.review && !wt.removed ? `<button class="copy" data-copy="${esc(wt.review)}">Copy diff command</button> ` : ''}<button class="copy" data-copy="${esc(t.prompt)}">Copy prompt</button>`;
+  if (t.state === 'running' || t.state === 'queued') followTask(id); else clearInterval(activityTimer);
 }
 
 function syncButtons() {
@@ -677,6 +734,12 @@ document.getElementById('t-size').addEventListener('change', (e) => { setTaskFil
 document.getElementById('wt-state').addEventListener('change', (e) => { state.wt.state = e.target.value; state.wt.page = 1; last && renderWorktrees(last); });
 document.getElementById('wt-tool').addEventListener('change', (e) => { state.wt.tool = e.target.value; state.wt.page = 1; last && renderWorktrees(last); });
 document.getElementById('task-close').addEventListener('click', () => document.getElementById('task').close());
+document.getElementById('task').addEventListener('close', () => clearInterval(activityTimer));
+// The activity cell is a div acting as a button: Enter and Space open it too.
+document.addEventListener('keydown', (e) => {
+  const el = e.target.closest?.('[data-task][role="button"]');
+  if (el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openTask(el.dataset.task); }
+});
 document.getElementById('task').addEventListener('click', (e) => { if (e.target.id === 'task') e.target.close(); }); // click on the backdrop
 document.addEventListener('click', async (e) => {
   const task = e.target.closest('[data-task]');
@@ -713,8 +776,12 @@ async function loadLive() {
   if (document.hidden || !last) return;
   try {
     const live = await getJson('/api/live');
+    const ids = (l) => (l ?? []).map((t) => `${t.id}:${t.state}`).sort().join();
+    const changed = ids(last.activeTasks) !== ids(live.activeTasks);
     Object.assign(last, { queue: live.queue, activeTasks: live.activeTasks }); // a resize redraws the latest
     renderLive(live);
+    // A task started, finished or left the queue: the task list, worktrees and today's totals change too.
+    if (changed) load();
   } catch {
     // the full refresh reports problems
   }
