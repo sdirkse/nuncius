@@ -362,6 +362,20 @@ test('the dashboard survives a malformed request, bad records, and uppercase Hos
     const more = JSON.parse((await get(`/api/task?id=${logged}&after=2`)).body);
     assert.deepEqual([more.activity.after, more.activity.items.map((e) => e.kind)], [2, ['edit', 'end']]);
     assert.equal(JSON.parse((await get(`/api/task?id=${logged}&after=-3`)).body).activity.after, 0, 'odd offsets fall back to the start');
+    // The task window's 2-second poll: only the state and the new lines, behind the token too.
+    assert.equal((await get(`/api/task/activity?id=${logged}`, undefined, null)).status, 401);
+    const slim = JSON.parse((await get(`/api/task/activity?id=${logged}&after=3`)).body);
+    assert.deepEqual(Object.keys(slim).sort(), ['activity', 'id', 'state']);
+    assert.deepEqual(slim.activity.items.map((e) => e.kind), ['end']);
+    assert.equal((await get('/api/task/activity?id=../../etc/passwd')).status, 404);
+    // A running task's progress comes from its own file, which the worker writes without the queue lock.
+    const running = '22222222-2222-4222-8222-222222222222';
+    fs.writeFileSync(path.join(tasksDir, `${running}.json`), JSON.stringify({ id: running, state: 'running', target: 'codex', prompt: 'p', workerPid: process.pid, createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), progress: { steps: 0 } }));
+    fs.writeFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${running}.progress.json`), JSON.stringify({ startedAt: new Date().toISOString(), lastActivityAt: new Date().toISOString(), lastActivity: 'Shell: npm test', steps: 3, filesEdited: 1, commands: 2 }));
+    const now = JSON.parse((await get('/api/live')).body).activeTasks.find((t) => t.id === running);
+    assert.equal(now.progress.steps, 3);
+    assert.equal(now.progress.lastActivity.what, 'Shell: npm test');
+    fs.rmSync(path.join(tasksDir, `${running}.json`));
     const tasks = await get('/api/tasks?page=9&size=25&q=%00%ff');
     assert.equal(tasks.status, 200, 'odd paging and search input is answered, not a crash');
     assert.deepEqual(Object.keys(JSON.parse(tasks.body)).sort(), ['items', 'page', 'pages', 'size', 'total']);

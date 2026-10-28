@@ -19,11 +19,11 @@ export function retentionDays(config = loadConfig()) {
   return typeof d === 'number' && Number.isFinite(d) && d >= 0 ? d : d === null ? null : 7;
 }
 
-// The run files of one task: <id>.out, <id>.patch, <id>.activity.jsonl and the <id>-evidence dir.
+// The run files of one task: <id>.out, <id>.patch, <id>.activity.jsonl, <id>.progress.json and the <id>-evidence dir.
 const runFiles = (id) => {
   let names = [];
   try {
-    names = fs.readdirSync(runsDir()).filter((n) => n === `${id}.out` || n === `${id}.patch` || n === `${id}.activity.jsonl` || n === `${id}-evidence`);
+    names = fs.readdirSync(runsDir()).filter((n) => n === `${id}.out` || n === `${id}.patch` || n === `${id}.activity.jsonl` || n === `${id}.progress.json` || n === `${id}-evidence`);
   } catch {
     // no runs dir
   }
@@ -62,7 +62,7 @@ export function pruneOldContent({ now = Date.now(), dryRun = false, config = loa
   }
   const known = new Set(tasks.map((t) => t.id));
   for (const n of names) {
-    const id = /^([0-9a-f-]{36})(?:\.out|\.patch|\.activity\.jsonl|-evidence)$/.exec(n)?.[1];
+    const id = /^([0-9a-f-]{36})(?:\.out|\.patch|\.activity\.jsonl|\.progress\.json|-evidence)$/.exec(n)?.[1];
     if (!id || known.has(id) || keep.has(id)) continue;
     const p = path.join(runsDir(), n);
     let mtime;

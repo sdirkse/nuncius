@@ -301,6 +301,9 @@ test('an error after the target ran still ends the task as failed, with one usag
   const t = tasks().at(-1);
   assert.equal(t.state, 'failed');
   assert.equal(usage().filter((u) => u.id === t.id).length, 1);
+  // The run broke off after it started: the record still gets its time and its last progress.
+  assert.ok(t.wallMs >= 0);
+  assert.equal(t.progress.commands, 0);
 });
 
 test('a scratch file the target made immutable does not break the task', () => {

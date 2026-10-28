@@ -13,6 +13,9 @@ export const TARGETS = {
   claude: { run: runClaude },
 };
 
+// How each tool is named to people.
+export const TOOL_NAMES = { codex: 'Codex', cursor: 'Cursor', claude: 'Claude' };
+
 // Own keys only: names like "constructor" or "__proto__" must never pass as a target.
 export const isTarget = (name) => typeof name === 'string' && Object.hasOwn(TARGETS, name);
 

@@ -679,7 +679,7 @@ function followTask(id) {
     if (!document.getElementById('task').open || document.hidden) return;
     const list = document.getElementById('alog');
     let t;
-    try { t = await getJson(`/api/task?${new URLSearchParams({ id, after: list?.dataset.lines ?? 0 })}`); } catch { return; }
+    try { t = await getJson(`/api/task/activity?${new URLSearchParams({ id, after: list?.dataset.lines ?? 0 })}`); } catch { return; }
     if (activityTimer !== timer) return; // the window moved on (closed, or another task) while this was asked
     if (!isLive(t)) { clearInterval(activityTimer); openTask(id, { activityOpen: true }); return; } // finished: show the answer
     if (!list) { if (t.activity) openTask(id); return; } // it started logging

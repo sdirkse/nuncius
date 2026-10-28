@@ -12,7 +12,7 @@ const MAX_WHAT = 100;
 export const MAX_LOG = 2000;
 
 export function cleanLabel(s) {
-  const one = String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const one = String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]+/g, ' ').replace(/\s+/g, ' ').trim();
   return one.length > MAX_WHAT ? `${one.slice(0, MAX_WHAT - 1)}…` : one;
 }
 
@@ -144,7 +144,6 @@ export function createProgress({ target, base, timeoutSeconds, now = () => Date.
   };
 }
 
-// The progress as callers see it, computed at read time. `finishedAt`: elapsed stops there.
 // The activity log as the dashboard shows it, oldest first: the lines of runs/<id>.activity.jsonl from
 // `after` on. Labels are cleaned again (the file is nuncius's own, but a damaged one must not put anything
 // odd on the page), and a line that is not a well-formed entry is skipped but still counted, so `after`
@@ -168,6 +167,7 @@ export function parseActivityLog(text, { after = 0 } = {}) {
   return { items, lines: lines.length };
 }
 
+// The progress as callers see it, computed at read time. `finishedAt`: elapsed stops there.
 export function progressView(progress, { state, startedAt, finishedAt, wallMs, now = Date.now() } = {}) {
   if (!progress || typeof progress !== 'object') return null;
   const start = Date.parse(startedAt ?? progress.startedAt);

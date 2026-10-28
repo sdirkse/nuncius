@@ -7,7 +7,7 @@ import { readUsage } from './log.js';
 import { checkBudget } from './budget.js';
 import { summarise, latestCodexLimits } from './summary.js';
 import { detectProject } from './project.js';
-import { callerTool, resolveTarget, discoverModels, targetStatus } from './targets.js';
+import { callerTool, resolveTarget, discoverModels, targetStatus, TOOL_NAMES } from './targets.js';
 import { cliVersion, versionCheck } from './versions.js';
 import { readClaudeLimits, claudeLimitsHint, readBridgeSeen } from './claude-limits.js';
 import { statuslineInstalled } from './statusline.js';
@@ -114,8 +114,7 @@ export function serverInfo() {
 export function instructions(config = loadConfig(), available = targetStatus(config).filter((t) => t.available).map((t) => t.name)) {
   const aliases = Object.entries(config.aliases ?? {}).filter(([, a]) => a && typeof a === 'object');
   const named = aliases.map(([n, a]) => (a.target === 'other' ? `${n} (never picks your own tool)` : n));
-  const NAMES = { codex: 'Codex', cursor: 'Cursor', claude: 'Claude' };
-  const have = available.map((t) => NAMES[t] ?? t);
+  const have = available.map((t) => TOOL_NAMES[t] ?? t);
   return [
     `nuncius delegates coding tasks to other AI tools on the user's own subscriptions. Available here: ${have.length ? have.join(', ') : 'none (no target CLI is installed and enabled; tell the user)'}. Each task runs sandboxed in its own git worktree; usage is logged and budgets are enforced.`,
     `1. list_targets: pick a target whose budget is ok${named.length ? `, or an alias: ${named.join(', ')}` : ''}.`,

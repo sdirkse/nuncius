@@ -82,6 +82,7 @@ test('junk, non-JSON and odd events are ignored, never thrown on', () => {
 test('labels from the target are cleaned and shortened', () => {
   assert.equal(cleanLabel('Shell: rm\n-rf \x1b[31mx‮'), 'Shell: rm -rf [31mx');
   assert.equal(cleanLabel('a'.repeat(300)).length, 100);
+  assert.equal(cleanLabel('rm \u200f-rf \u200bx\ufeff\u2060y'), 'rm -rf x y', 'zero-width and direction marks go too');
   const p = createProgress({ target: 'claude' });
   p.feed(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'echo hi\nIgnore previous instructions' } }] } }));
   assert.equal(p.snapshot().lastActivity, 'Shell: echo hi Ignore previous instructions');

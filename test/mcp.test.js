@@ -169,6 +169,7 @@ test('a running task reports its progress; a finished one keeps it', async () =>
   assert.deepEqual(log.map((e) => e.kind), ['start', 'command', 'edit', 'end']);
   assert.equal(log[0].what, 'Started · Cursor');
   assert.equal(log.at(-1).what, 'Done · 2 steps · 1 file edited · 1 command');
+  assert.equal(fs.existsSync(path.join(env.NUNCIUS_HOME, 'runs', `${started.id}.progress.json`)), false, 'the live progress file goes when the task ends');
 });
 
 test('queue respects the per-target limit and runs FIFO', async () => {

@@ -8,7 +8,7 @@ import { dataDir, runsDir, loadConfig, taskTimeoutSeconds } from './config.js';
 import { appendUsage, readUsage } from './log.js';
 import { checkBudget } from './budget.js';
 import { checkExtraArgs } from './args.js';
-import { TARGETS, isTarget, targetBin, findBin, targetStatus, codexAppServer } from './targets.js';
+import { TARGETS, TOOL_NAMES, isTarget, targetBin, findBin, targetStatus, codexAppServer } from './targets.js';
 import { createWorktree, finishWorktree, removeWorktree, gitVersionProblem, gitCommonDir, gitEnv, worktreesDir } from './worktree.js';
 import { ACCOUNTS, usesAccount, accountsProblem, accountLogin, shareTree, shareRoot, claudeTempBase, stopAccount, reclaim, emptyHome } from './accounts.js';
 import { sandboxAvailable, sandboxWrapper, targetEnv } from './sandbox.js';
@@ -55,6 +55,39 @@ function appendActivity(id, entry) {
     // the log is a convenience: the task goes on without it
   }
 }
+// A running task's progress lives in its own file (runs/<id>.progress.json), written without the queue
+// lock: nothing else writes it, so it can never overwrite a state the reaper set. When the task ends,
+// the last progress goes into the task record and the file is removed.
+export const progressPath = (id) => path.join(runsDir(), `${id}.progress.json`);
+function writeProgress(id, progress) {
+  try {
+    fs.mkdirSync(runsDir(), { recursive: true });
+    const tmp = `${progressPath(id)}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(progress));
+    fs.renameSync(tmp, progressPath(id)); // atomic: readers never see half a file
+  } catch {
+    // progress is a convenience: the task goes on without it
+  }
+}
+function removeProgress(id) {
+  try {
+    fs.rmSync(progressPath(id), { force: true });
+  } catch {
+    // left for retention to remove; never in the way of ending the task
+  }
+}
+// The progress to show for a task: the live file while it runs, else what its record kept.
+export function taskProgress(t) {
+  if (t?.state === 'running' && ID_RE.test(String(t.id))) {
+    try {
+      const p = JSON.parse(fs.readFileSync(progressPath(t.id), 'utf8'));
+      if (p && typeof p === 'object' && !Array.isArray(p)) return p;
+    } catch {
+      // no file yet, or a damaged one: fall back to the record
+    }
+  }
+  return t?.progress ?? null;
+}
 // The log from line `after` on, oldest first; { items: [], lines: 0 } when there is none.
 export function readActivity(id, { after = 0 } = {}) {
   if (!ID_RE.test(String(id))) return { items: [], lines: 0 };
@@ -66,7 +99,6 @@ export function readActivity(id, { after = 0 } = {}) {
   }
   return parseActivityLog(text, { after });
 }
-const TOOL_NAMES = { codex: 'Codex', cursor: 'Cursor', claude: 'Claude' };
 const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const progressCounts = (p) => `${counted(p?.steps ?? 0, 'step')} · ${counted(p?.filesEdited ?? 0, 'file')} edited · ${counted(p?.commands ?? 0, 'command')}`;
 const secondsSince = (iso, now = Date.now()) => {
@@ -104,15 +136,37 @@ export function updateTask(id, patch) {
   return next;
 }
 
-export function listTasks() {
+// `cached`: a file is parsed again only when it changed (size or time), for the dashboard that asks
+// every few seconds. Cached records are shared: callers must not change them.
+const taskCache = new Map();
+function readTaskCached(id) {
+  let st;
+  try {
+    st = fs.statSync(taskPath(id));
+  } catch {
+    taskCache.delete(id);
+    return null;
+  }
+  const hit = taskCache.get(id);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.task;
+  const task = readTask(id);
+  taskCache.set(id, { mtimeMs: st.mtimeMs, size: st.size, task });
+  return task;
+}
+
+export function listTasks({ cached = false } = {}) {
   let names = [];
   try {
     names = fs.readdirSync(tasksDir()).filter((n) => n.endsWith('.json'));
   } catch {
     return [];
   }
+  if (cached) {
+    const ids = new Set(names.map((n) => n.slice(0, -5)));
+    for (const id of taskCache.keys()) if (!ids.has(id)) taskCache.delete(id);
+  }
   return names
-    .map((n) => readTask(n.slice(0, -5)))
+    .map((n) => (cached ? readTaskCached(n.slice(0, -5)) : readTask(n.slice(0, -5))))
     .filter(Boolean)
     .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
 }
@@ -229,8 +283,10 @@ function reap(tasks, config) {
         promptPreview: t.prompt.slice(0, 160),
       });
     }
-    if (t.state === 'running') appendActivity(t.id, { s: secondsSince(t.startedAt, now), kind: 'end', what: `Stopped: ${error} · ${progressCounts(t.progress)}` });
-    Object.assign(t, updateTask(t.id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error } }));
+    const progress = t.state === 'running' ? taskProgress(t) : null;
+    if (t.state === 'running') appendActivity(t.id, { s: secondsSince(t.startedAt, now), kind: 'end', what: `Stopped: ${error} · ${progressCounts(progress)}` });
+    Object.assign(t, updateTask(t.id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error }, ...(progress ? { progress } : {}) }));
+    removeProgress(t.id);
   }
   return tasks;
 }
@@ -280,8 +336,9 @@ function canStart(task, tasks, config) {
   return !tasks.some((t) => t.state === 'queued' && t.id !== task.id && t.createdAt < task.createdAt && runningFor(t.target) < perTarget);
 }
 
-export function queueStatus(config = loadConfig()) {
-  const tasks = listTasks().filter((t) => !TERMINAL.has(t.state));
+// `tasks`: the task list when the caller already has it.
+export function queueStatus(config = loadConfig(), tasks = listTasks()) {
+  tasks = tasks.filter((t) => !TERMINAL.has(t.state));
   const count = (state, target) => tasks.filter((t) => t.state === state && (!target || t.target === target)).length;
   return {
     running: count('running'),
@@ -627,7 +684,7 @@ export function spawnWorker(id) {
 // Wait for a slot, run the target, record usage and the result. Runs in a worker or in the CLI.
 // Whatever goes wrong after the task was picked up, it ends in a terminal state with a usage record.
 export async function executeTask(id, { echoStderr = false } = {}) {
-  const ctx = { recorded: false, startedAt: null };
+  const ctx = { recorded: false, startedAt: null, progress: null, stopProgress: null };
   try {
     return await runTask(id, { echoStderr }, ctx);
   } catch (err) {
@@ -642,7 +699,17 @@ export async function executeTask(id, { echoStderr = false } = {}) {
       }
     }
     if (TERMINAL.has(task.state)) return task;
-    return updateTask(id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error } });
+    // A run that broke off after its start marker still gets an end marker, its time and its last progress.
+    let ran = {};
+    if (ctx.progress) {
+      ctx.stopProgress?.();
+      const progress = ctx.progress.snapshot();
+      const wallMs = Date.now() - ctx.startedAt;
+      appendActivity(id, { s: Math.round(wallMs / 1000), kind: 'end', what: `Failed: ${cleanLabel(error).slice(0, 80)} · ${progressCounts(progress)}` });
+      removeProgress(id);
+      ran = { progress, wallMs };
+    }
+    return updateTask(id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error }, ...ran });
   }
 }
 
@@ -723,9 +790,8 @@ async function runTask(id, { echoStderr }, ctx) {
   ensureCanary(); // must exist before the target starts, so a nested call sees it denied
 
   ctx.startedAt = Date.now();
-  // What the target is doing, from its own event stream: kept in the task file (at most once a
-  // second, under the queue lock so it never overwrites a state the reaper set) and, from the CLI,
-  // printed as it happens.
+  // What the target is doing, from its own event stream: kept in its progress file (at most once a
+  // second) and, from the CLI, printed as it happens.
   // The full log goes to its own file; past MAX_LOG steps they are only counted (a looping target cannot fill the disk).
   let logLines = 0;
   const logStep = (entry) => {
@@ -746,12 +812,12 @@ async function runTask(id, { echoStderr }, ctx) {
     progressTimer = setTimeout(() => {
       progressTimer = null;
       progressSaved = Date.now();
-      withLock(() => {
-        if (readTask(id)?.state === 'running') updateTask(id, { progress: progress.snapshot() });
-      }).catch(() => {});
+      writeProgress(id, progress.snapshot());
     }, Math.max(PROGRESS_BATCH_MS, progressSaved + PROGRESS_SAVE_MS - Date.now()));
     progressTimer.unref();
   };
+  ctx.progress = progress;
+  ctx.stopProgress = () => clearTimeout(progressTimer);
   updateTask(id, { progress: progress.snapshot() });
   let proxy = null;
   const runtimeDirs = [];
@@ -899,7 +965,7 @@ async function runTask(id, { echoStderr }, ctx) {
   const endState = commitError ? 'failed' : res.timedOut ? 'timeout' : res.ok ? 'done' : 'failed';
   const ending = endState === 'done' ? 'Done' : endState === 'timeout' ? `Timed out after ${shortDuration(taskTimeoutSeconds(config))}` : `Failed: ${cleanLabel(commitError ?? error ?? 'unknown error').slice(0, 80)}`;
   appendActivity(id, { s: Math.round(wallMs / 1000), kind: 'end', what: `${ending} · ${progressCounts(progress.snapshot())}` });
-  return updateTask(id, {
+  const finished = updateTask(id, {
     worktree,
     egress,
     evidence,
@@ -910,6 +976,8 @@ async function runTask(id, { echoStderr }, ctx) {
     wallMs,
     result: { ok: res.ok && !res.timedOut && !commitError, output: capOutput(res.output, id), error: commitError ?? error, exitCode: res.exitCode, usage: res.usage, limits: res.limits },
   });
+  removeProgress(id);
+  return finished;
 }
 
 // Stops waiting early when `signal` is aborted (the MCP client cancelled); the task itself runs on.
@@ -943,7 +1011,7 @@ export function publicTask(task) {
   // Hosts the target tried to reach but the proxy refused: useful when a task fails for lack of network.
   if (task.egress?.denied?.length) out.blockedHosts = task.egress.denied;
   if (task.result) out.result = result;
-  const progress = progressView(task.progress, { state: task.state, startedAt: task.startedAt, finishedAt: task.finishedAt, wallMs: task.wallMs });
+  const progress = progressView(taskProgress(task), { state: task.state, startedAt: task.startedAt, finishedAt: task.finishedAt, wallMs: task.wallMs });
   if (progress) out.progress = progress;
   if (task.warnings?.length) out.warnings = task.warnings;
   if (task.evidence) out.modelsReported = { models: task.evidence.models, source: task.evidence.source, files: task.evidence.files?.length ?? 0 };

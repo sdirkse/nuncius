@@ -68,6 +68,7 @@ export function run(bin, args, { cwd, env = process.env, timeoutMs = 0, echoStde
     const done = (result) => {
       if (settled) return;
       settled = true;
+      if (onLine && partial && !skipping) tell(partial); // the last line, without a newline after it
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(graceTimer);
@@ -85,21 +86,32 @@ export function run(bin, args, { cwd, env = process.env, timeoutMs = 0, echoStde
     // Decode as a stream: a multibyte character split across two chunks stays intact.
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    // Lines are cut from the stream separately from what is kept, and a line longer than the cap is dropped.
+    // Lines are cut from the stream separately from what is kept. Only the new chunk is searched for a
+    // newline, and a line longer than the cap is dropped whole: skipped up to its newline, never handed on in parts.
     let partial = '';
-    const lines = (d) => {
-      partial += d;
-      let nl;
-      while ((nl = partial.indexOf('\n')) >= 0) {
-        const line = partial.slice(0, nl);
-        partial = partial.slice(nl + 1);
-        try {
-          onLine(line);
-        } catch {
-          // a listener must never break the run
-        }
+    let skipping = false;
+    const tell = (line) => {
+      try {
+        onLine(line);
+      } catch {
+        // a listener must never break the run
       }
-      if (partial.length > MAX_LINE_CHARS) partial = '';
+    };
+    const lines = (d) => {
+      let from = 0;
+      let nl;
+      while ((nl = d.indexOf('\n', from)) >= 0) {
+        if (!skipping) tell(partial + d.slice(from, nl));
+        partial = '';
+        skipping = false;
+        from = nl + 1;
+      }
+      if (skipping) return;
+      partial += d.slice(from);
+      if (partial.length > MAX_LINE_CHARS) {
+        partial = '';
+        skipping = true;
+      }
     };
     child.stdout.on('data', (d) => {
       stdout = keep(stdout, d);

@@ -6,18 +6,22 @@ import { num, tokens } from '../num.js';
 // object that plain json prints alone:
 // { type, subtype, is_error, duration_ms, duration_api_ms, result, session_id, request_id,
 //   usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } } (usage since 2026-10).
+// No result object (the run broke off): the last object that reports an error, so its reason still reaches the caller.
 export function parseCursorJson(stdout) {
   const lines = stdout.trim().split('\n');
+  let failure = null;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (!lines[i].startsWith('{')) continue;
+    let o;
     try {
-      const o = JSON.parse(lines[i]);
-      if (o?.type === 'result') return o;
+      o = JSON.parse(lines[i]);
     } catch {
-      // not JSON
+      continue; // not JSON
     }
+    if (o?.type === 'result') return o;
+    if (!failure && (o?.is_error === true || o?.type === 'error')) failure = o;
   }
-  return null;
+  return failure;
 }
 
 export async function runCursor({ bin, prompt, extraArgs, cwd, env, timeoutMs, echoStderr, wrap, onSpawn, onLine }) {
@@ -34,18 +38,26 @@ export async function runCursor({ bin, prompt, extraArgs, cwd, env, timeoutMs, e
   const cmd = wrap ? wrap(bin, args) : { bin, args };
   const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn, onLine });
   const obj = parseCursorJson(res.stdout);
-  const ok = res.code === 0 && !!obj && !obj.is_error;
+  const ok = res.code === 0 && obj?.type === 'result' && !obj.is_error;
   return {
     exitCode: res.code,
     timedOut: res.timedOut,
     ok,
-    error: ok ? null : obj?.result && obj.is_error ? String(obj.result).slice(0, 300) : lastLine(res.stderr) || `exit code ${res.code}`,
+    error: ok ? null : cursorError(obj) || lastLine(res.stderr) || `exit code ${res.code}`,
     sessionId: obj?.session_id ?? null,
-    output: obj?.result ?? '',
+    output: obj?.type === 'result' ? (obj.result ?? '') : '',
     rawStdout: res.stdout,
     usage: cursorUsage(obj),
     limits: null,
   };
+}
+
+// The reason in a failed result, or in an error object (its message, or its error as text).
+function cursorError(obj) {
+  if (!obj) return '';
+  const why = obj.type === 'result' ? (obj.is_error ? obj.result : null) : (obj.message ?? obj.error ?? obj.result);
+  if (why == null || why === '') return '';
+  return (typeof why === 'string' ? why : JSON.stringify(why)).slice(0, 300);
 }
 
 function lastLine(s) {

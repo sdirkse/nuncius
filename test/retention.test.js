@@ -30,6 +30,7 @@ function task(n, { state = 'done', daysAgo, worktree } = {}) {
   fs.writeFileSync(data('runs', `${t.id}.out`), 'raw');
   fs.writeFileSync(data('runs', `${t.id}.patch`), 'diff');
   fs.writeFileSync(data('runs', `${t.id}.activity.jsonl`), '{"s":0,"kind":"start","what":"Started"}\n');
+  fs.writeFileSync(data('runs', `${t.id}.progress.json`), '{}');
   fs.mkdirSync(data('runs', `${t.id}-evidence`));
   return t.id;
 }
@@ -54,9 +55,9 @@ test('old task content goes, the numbers stay, open worktrees and running tasks 
 
   const { pruneOldContent } = await import('../src/retention.js');
   const r = pruneOldContent({ config: { retention: { days: 7 } } });
-  assert.deepEqual({ tasks: r.tasks, runFiles: r.runFiles, usageRecords: r.usageRecords }, { tasks: 1, runFiles: 5, usageRecords: 2 });
+  assert.deepEqual({ tasks: r.tasks, runFiles: r.runFiles, usageRecords: r.usageRecords }, { tasks: 1, runFiles: 6, usageRecords: 2 });
 
-  assert.ok(!exists('tasks', `${oldDone}.json`) && !exists('runs', `${oldDone}.out`) && !exists('runs', `${oldDone}.patch`) && !exists('runs', `${oldDone}.activity.jsonl`) && !exists('runs', `${oldDone}-evidence`));
+  assert.ok(!exists('tasks', `${oldDone}.json`) && !exists('runs', `${oldDone}.out`) && !exists('runs', `${oldDone}.patch`) && !exists('runs', `${oldDone}.activity.jsonl`) && !exists('runs', `${oldDone}.progress.json`) && !exists('runs', `${oldDone}-evidence`));
   assert.ok(!exists('runs', `${orphan}.out`), 'an old run file without a task record goes too');
   for (const kept of [oldOpen, oldRunning, recent]) assert.ok(exists('tasks', `${kept}.json`) && exists('runs', `${kept}.patch`), kept);
 
