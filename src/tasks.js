@@ -970,12 +970,15 @@ async function runTask(id, { echoStderr }, ctx) {
   }
   const endState = commitError ? 'failed' : res.timedOut ? 'timeout' : res.ok ? 'done' : 'failed';
   const ending = endState === 'done' ? 'Done' : endState === 'timeout' ? `Timed out after ${shortDuration(taskTimeoutSeconds(config))}` : `Failed: ${cleanLabel(commitError ?? error ?? 'unknown error').slice(0, 80)}`;
-  appendActivity(id, { s: Math.round(wallMs / 1000), kind: 'end', what: `${ending} · ${progressCounts(progress.snapshot())}` });
+  // A committed run's changed files are known exactly, however they were written: the tools report only
+  // their edit tools while they run, not a file written by a shell command.
+  const finalProgress = { ...progress.snapshot(), ...(worktree !== task.worktree ? { filesEdited: worktree.changed ? worktree.files.length : 0 } : {}) };
+  appendActivity(id, { s: Math.round(wallMs / 1000), kind: 'end', what: `${ending} · ${progressCounts(finalProgress)}` });
   const finished = updateTask(id, {
     worktree,
     egress,
     evidence,
-    progress: progress.snapshot(),
+    progress: finalProgress,
     ...(warnings.length ? { warnings } : {}),
     state: endState,
     finishedAt: new Date().toISOString(),

@@ -13,10 +13,12 @@ if (process.env.FAKE_ARGS_FILE) (await import('node:fs')).writeFileSync(process.
 const fullPrompt = args[args.length - 1];
 // The nuncius prepends a preamble; the actual task follows "Task:".
 const prompt = fullPrompt.includes('\nTask:\n') ? fullPrompt.slice(fullPrompt.indexOf('\nTask:\n') + 7) : fullPrompt;
-// Test hooks: WRITE:<rel> edits a file in cwd; ESCAPE:<abs> and READ:<abs> probe the sandbox.
+// Test hooks: WRITE:<rel> edits a file in cwd (and reports it); ESCAPE:<abs> and READ:<abs> probe the sandbox.
 const fsx = await import('node:fs');
 const notes = [];
-for (const [, rel] of prompt.matchAll(/WRITE:(\S+)/g)) fsx.writeFileSync(rel, `written by fake\n`);
+for (const [, rel] of prompt.matchAll(/(?<!SHELL)WRITE:(\S+)/g)) fsx.writeFileSync(rel, `written by fake\n`);
+// SHELLWRITE:<rel> writes a file the way a shell command would: no edit event for it.
+for (const [, rel] of prompt.matchAll(/SHELLWRITE:(\S+)/g)) fsx.writeFileSync(rel, `written by a shell command\n`);
 for (const [, abs] of prompt.matchAll(/ESCAPE:(\S+)/g)) {
   try { fsx.writeFileSync(abs, 'escaped'); notes.push(`escape ${abs} OK`); } catch (e) { notes.push(`escape ${abs} ${e.code}`); }
 }
@@ -30,7 +32,7 @@ const event = (o) => stream && console.log(JSON.stringify(o));
 event({ type: 'system', subtype: 'init', model: 'fake', session_id: 'c-123' });
 event({ type: 'tool_call', subtype: 'started', call_id: 't1', tool_call: { shellToolCall: { args: { command: 'ls -la' } } } });
 event({ type: 'tool_call', subtype: 'completed', call_id: 't1', tool_call: { shellToolCall: { args: { command: 'ls -la' }, result: { success: {} } } } });
-for (const [, rel] of prompt.matchAll(/WRITE:(\S+)/g)) event({ type: 'tool_call', subtype: 'started', call_id: `w-${rel}`, tool_call: { editToolCall: { args: { path: `${process.cwd()}/${rel}` } } } });
+for (const [, rel] of prompt.matchAll(/(?<!SHELL)WRITE:(\S+)/g)) event({ type: 'tool_call', subtype: 'started', call_id: `w-${rel}`, tool_call: { editToolCall: { args: { path: `${process.cwd()}/${rel}` } } } });
 // "SLEEP:<ms>" anywhere in the prompt makes the fake take that long, to exercise queueing and timeouts.
 const sleepMs = Number(/SLEEP:(\d+)/.exec(prompt)?.[1] ?? 0);
 if (sleepMs) await new Promise((r) => setTimeout(r, sleepMs));

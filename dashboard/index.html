@@ -603,6 +603,15 @@ const TOKEN = (() => {
   if (t) sessionStorage.setItem('nuncius-token', t);
   return t || sessionStorage.getItem('nuncius-token') || '';
 })();
+// A new link pasted into this tab (after a restart, the dashboard prints a new token) changes only the
+// fragment, which does not reload the page: start over with the new token.
+window.addEventListener('hashchange', () => {
+  const t = new URLSearchParams(location.hash.slice(1)).get('t');
+  if (t && t !== TOKEN) {
+    sessionStorage.setItem('nuncius-token', t);
+    location.reload();
+  }
+});
 const api = (url) => fetch(url, { headers: { 'x-nuncius-token': TOKEN } });
 
 const getJson = async (url) => {

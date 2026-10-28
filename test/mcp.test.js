@@ -172,6 +172,16 @@ test('a running task reports its progress; a finished one keeps it', async () =>
   assert.equal(fs.existsSync(path.join(env.NUNCIUS_HOME, 'runs', `${started.id}.progress.json`)), false, 'the live progress file goes when the task ends');
 });
 
+test('a finished task counts the files its commit changed, also those written by a shell command', async () => {
+  const { call } = await startServer();
+  const t = (await call('run_task', { target: 'cursor', prompt: 'edit WRITE:a.txt SHELLWRITE:b.txt', cwd: repo, wait_seconds: 10 })).structuredContent;
+  assert.equal(t.state, 'done');
+  assert.deepEqual(t.worktree.files, ['a.txt', 'b.txt']);
+  assert.equal(t.progress.filesEdited, 2, 'not only the one the tool reported');
+  const log = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${t.id}.activity.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(log.at(-1).what, 'Done · 2 steps · 2 files edited · 1 command');
+});
+
 test('queue respects the per-target limit and runs FIFO', async () => {
   writeConfig({ concurrency: { perTarget: 1, total: 4 } });
   const { call } = await startServer();
