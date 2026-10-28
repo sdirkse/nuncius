@@ -384,6 +384,9 @@ test('the dashboard survives a malformed request, bad records, and uppercase Hos
     const now = JSON.parse((await get('/api/live')).body).activeTasks.find((t) => t.id === running);
     assert.equal(now.progress.steps, 3);
     assert.equal(now.progress.lastActivity.what, 'Shell: npm test');
+    // Once it finishes it leaves the live view, and stays gone (a finished task is not read again).
+    fs.writeFileSync(path.join(tasksDir, `${running}.json`), JSON.stringify({ id: running, state: 'done', target: 'codex', prompt: 'p', createdAt: new Date().toISOString() }));
+    for (let i = 0; i < 2; i++) assert.equal(JSON.parse((await get('/api/live')).body).activeTasks.some((t) => t.id === running), false);
     fs.rmSync(path.join(tasksDir, `${running}.json`));
     const tasks = await get('/api/tasks?page=9&size=25&q=%00%ff');
     assert.equal(tasks.status, 200, 'odd paging and search input is answered, not a crash');

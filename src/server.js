@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { readUsage } from './log.js';
 import { summarise, latestCodexLimits, taskPage } from './summary.js';
 import { loadConfig, configPath } from './config.js';
-import { listTasks, readTask, readActivity, taskProgress, queueStatus, TERMINAL, freshCodexLimits } from './tasks.js';
+import { listLiveTasks, readTask, readActivity, taskProgress, queueStatus, freshCodexLimits } from './tasks.js';
 import { openWorktrees, autoCleanup } from './cleanup.js';
 import { claudeLimitsHint, readBridgeSeen } from './claude-limits.js';
 import { targetStatus } from './targets.js';
@@ -43,7 +43,7 @@ export function buildSummary({ days = 30, project = '' } = {}) {
 // The Now section on its own: cheap (task files only), so the page asks for it every few seconds.
 // Live tasks are shown for every project: the queue is shared.
 export function buildLive(config = loadConfig()) {
-  const live = listTasks({ cached: true }).filter((t) => !TERMINAL.has(t.state));
+  const live = listLiveTasks();
   const activeTasks = live
     .map((t) => ({ id: t.id, state: t.state, target: t.target, model: t.model, project: t.project, agent: t.agent, createdAt: t.createdAt, startedAt: t.startedAt ?? null, network: !!t.network, promptPreview: String(t.prompt ?? '').slice(0, 160),
       // The page counts the times on itself between polls, so it gets the moments, not just the view.

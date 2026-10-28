@@ -102,9 +102,9 @@ export function readActivity(id, { from = 0 } = {}) {
     const { size } = fs.fstatSync(fd);
     const start = Math.min(from, size);
     const buf = Buffer.alloc(size - start);
-    fs.readSync(fd, buf, 0, buf.length, start);
-    const end = buf.lastIndexOf(0x0a) + 1; // a line still being written waits for the next read
-    return { items: parseActivityLog(buf.subarray(0, end).toString('utf8')), next: start + end };
+    const read = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, start));
+    const end = read.lastIndexOf(0x0a) + 1; // a line still being written waits for the next read
+    return { items: parseActivityLog(read.subarray(0, end).toString('utf8')), next: start + end };
   } finally {
     fs.closeSync(fd);
   }
@@ -146,39 +146,35 @@ export function updateTask(id, patch) {
   return next;
 }
 
-// `cached`: a file is parsed again only when it changed (size or time), for the dashboard that asks
-// every few seconds. Cached records are shared: callers must not change them.
-const taskCache = new Map();
-function readTaskCached(id) {
-  let st;
+const taskIds = () => {
   try {
-    st = fs.statSync(taskPath(id));
-  } catch {
-    taskCache.delete(id);
-    return null;
-  }
-  const hit = taskCache.get(id);
-  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.task;
-  const task = readTask(id);
-  taskCache.set(id, { mtimeMs: st.mtimeMs, size: st.size, task });
-  return task;
-}
-
-export function listTasks({ cached = false } = {}) {
-  let names = [];
-  try {
-    names = fs.readdirSync(tasksDir()).filter((n) => n.endsWith('.json'));
+    return fs.readdirSync(tasksDir()).filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5));
   } catch {
     return [];
   }
-  if (cached) {
-    const ids = new Set(names.map((n) => n.slice(0, -5)));
-    for (const id of taskCache.keys()) if (!ids.has(id)) taskCache.delete(id);
+};
+const byCreation = (a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''));
+
+export function listTasks() {
+  return taskIds().map(readTask).filter(Boolean).sort(byCreation);
+}
+
+// The queued and running tasks, for the dashboard that asks every few seconds. A finished task never
+// runs again, so once one is seen finished its file is not read again (only its id is remembered).
+const finishedIds = new Set();
+export function listLiveTasks() {
+  const ids = taskIds();
+  const present = new Set(ids);
+  for (const id of finishedIds) if (!present.has(id)) finishedIds.delete(id);
+  const live = [];
+  for (const id of ids) {
+    if (finishedIds.has(id)) continue;
+    const t = readTask(id);
+    if (!t) continue;
+    if (TERMINAL.has(t.state)) finishedIds.add(id);
+    else live.push(t);
   }
-  return names
-    .map((n) => (cached ? readTaskCached(n.slice(0, -5)) : readTask(n.slice(0, -5))))
-    .filter(Boolean)
-    .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
+  return live.sort(byCreation);
 }
 
 function pidAlive(pid) {
