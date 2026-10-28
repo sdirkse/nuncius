@@ -665,7 +665,7 @@ function activitySection(t, { open = false } = {}) {
   const rows = a.items.length ? activityRows(a.items) : '<li><span></span><span class="what sub">Nothing logged.</span></li>';
   const list = `<ol class="alog${isLive(t) ? ' live' : ''}" id="alog" data-lines="${a.lines}">${rows}</ol>`;
   if (isLive(t)) return `<div class="alog-head"><h3>Activity</h3><span class="sub" id="alog-counts">${activityCounts(a)}</span><button class="alog-new" id="alog-new" hidden></button></div>${list}`;
-  return `<details class="alog-wrap"${open ? ' open' : ''}><summary><h3>Activity</h3><span class="sub">${activityCounts(a)}${a.elapsedSeconds != null ? ` · ${fmtDur(a.elapsedSeconds * 1000)}` : ''}</span></summary>${list}</details>`;
+  return `<details class="alog-wrap"${open ? ' open' : ''}><summary><h3>Activity</h3><span class="sub">${activityCounts(a)}${t.wallMs != null ? ` · ${fmtDur(t.wallMs)}` : a.elapsedSeconds != null ? ` · ${a.elapsedSeconds < 60 ? `${a.elapsedSeconds} s` : fmtDur(a.elapsedSeconds * 1000)}` : ''}</span></summary>${list}</details>`;
 }
 let activityTimer = null;
 function followTask(id) {
