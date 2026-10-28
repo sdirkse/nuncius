@@ -93,11 +93,20 @@
   .activity .what, .alog .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .alog-head { display: flex; align-items: baseline; gap: 12px; margin: 12px 0 0; }
   .alog-head h3 { margin: 0; }
-  .alog { list-style: none; margin: 4px 0 12px; padding: 4px 0; max-height: 40vh; overflow: auto; background: var(--page); border: 1px solid var(--grid); border-radius: 8px; font-variant-numeric: tabular-nums; }
+  .alog { list-style: none; margin: 4px 0 12px; padding: 4px 0; max-height: 40vh; overflow: auto; overscroll-behavior: contain; background: var(--page); border: 1px solid var(--grid); border-radius: 8px; font-variant-numeric: tabular-nums; }
   .alog li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; padding: 2px 12px; font-size: 12px; }
   .alog li .at { color: var(--muted); text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .alog li.soft .what { color: var(--muted); font-style: italic; }
   .alog li.edit .what { color: var(--ink); font-weight: 600; }
+  .alog.live { max-height: 11.5em; }
+  .alog li.mark .what { color: var(--ink); font-weight: 650; }
+  .alog-wrap { margin: 4px 0 12px; }
+  .alog-wrap summary { display: flex; align-items: baseline; gap: 12px; cursor: pointer; list-style: none; padding: 4px 0; }
+  .alog-wrap summary::-webkit-details-marker { display: none; }
+  .alog-wrap summary::before { content: '▸'; color: var(--muted); font-size: 12px; transition: transform .15s; }
+  .alog-wrap[open] summary::before { transform: rotate(90deg); }
+  .alog-wrap summary h3 { margin: 0; }
+  .alog-wrap summary:hover .sub { color: var(--ink-2); }
   .alog-new { border: 1px solid var(--grid); background: var(--surface); border-radius: 999px; font-size: 12px; padding: 1px 10px; cursor: pointer; color: var(--ink-2); }
   .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--track); color: var(--ink-2); white-space: nowrap; }
   .copy { border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); border-radius: 6px; font: 12px inherit; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
@@ -639,49 +648,69 @@ async function load() {
 }
 
 // The detail view: everything shown as text, the target's answer included (it is target output).
-// The task window's activity log: newest first, times from the task's start (they do not tick).
-// While the task runs it fills in every 2 s; when you have scrolled down to read, it waits and offers
-// the new steps instead of moving the list under you.
-const KIND_CLASS = { edit: 'edit', thinking: 'soft', message: 'soft' };
+// The task window's activity log, oldest first from ▶ start to ■ end, times from the task's start (they do
+// not tick). While the task runs it is a small box that keeps to the newest line and gets only the new lines
+// every 2 s; scrolled up to read, it stays put and offers the new steps. Finished: one line under the answer
+// that opens the whole log.
+const KIND_CLASS = { edit: 'edit', thinking: 'soft', message: 'soft', note: 'soft', start: 'mark', end: 'mark' };
+const KIND_ICON = { start: '▶ ', end: '■ ' };
 const fmtAt = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, '0'); return h ? `+${h}:${String(m).padStart(2, '0')}:${sec}` : `+${m}:${sec}`; };
-function activityItems(a) {
-  if (!a.items.length) return `<li><span></span><span class="what sub">${a.lastActivity?.secondsAgo == null ? 'Nothing reported yet.' : 'No steps reported yet.'}</span></li>`;
-  return a.items.map((e) => `<li class="${KIND_CLASS[e.kind] ?? ''}"><span class="at">${fmtAt(e.s)}</span><span class="what" title="${esc(e.what)}">${esc(e.what)}</span></li>`).join('') +
-    (a.logged > a.items.length ? `<li><span></span><span class="sub">… ${plural(a.logged - a.items.length, 'earlier step')} not kept</span></li>` : '');
-}
+const activityRows = (items) => items.map((e) => `<li class="${KIND_CLASS[e.kind] ?? ''}"><span class="at">${fmtAt(e.s)}</span><span class="what" title="${esc(e.what)}">${KIND_ICON[e.kind] ?? ''}${esc(e.what)}</span></li>`).join('');
 const activityCounts = (a) => `${plural(a.steps, 'step')} · ${plural(a.filesEdited, 'file')} edited · ${plural(a.commands, 'command')}`;
-function activitySection(t) {
+const isLive = (t) => t.state === 'running' || t.state === 'queued';
+const atBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+function activitySection(t, { open = false } = {}) {
   const a = t.activity;
   if (!a) return '';
-  return `<div class="alog-head"><h3>Activity</h3><span class="sub" id="alog-counts">${activityCounts(a)}</span><button class="alog-new" id="alog-new" hidden></button></div>
-    <ol class="alog" id="alog" data-logged="${a.logged}">${activityItems(a)}</ol>`;
+  const rows = a.items.length ? activityRows(a.items) : '<li><span></span><span class="what sub">Nothing logged.</span></li>';
+  const list = `<ol class="alog${isLive(t) ? ' live' : ''}" id="alog" data-lines="${a.lines}">${rows}</ol>`;
+  if (isLive(t)) return `<div class="alog-head"><h3>Activity</h3><span class="sub" id="alog-counts">${activityCounts(a)}</span><button class="alog-new" id="alog-new" hidden></button></div>${list}`;
+  return `<details class="alog-wrap"${open ? ' open' : ''}><summary><h3>Activity</h3><span class="sub">${activityCounts(a)}${a.elapsedSeconds != null ? ` · ${fmtDur(a.elapsedSeconds * 1000)}` : ''}</span></summary>${list}</details>`;
 }
 let activityTimer = null;
 function followTask(id) {
   clearInterval(activityTimer);
-  activityTimer = setInterval(async () => {
-    const dlg = document.getElementById('task');
-    if (!dlg.open || document.hidden) return;
+  const list = document.getElementById('alog');
+  if (list) {
+    list.scrollTop = list.scrollHeight;
+    list.addEventListener('scroll', () => { if (atBottom(list)) { const b = document.getElementById('alog-new'); b.hidden = true; b.dataset.count = 0; } });
+  }
+  const timer = setInterval(async () => {
+    if (!document.getElementById('task').open || document.hidden) return;
+    const list = document.getElementById('alog');
     let t;
-    try { t = await getJson(`/api/task?${new URLSearchParams({ id })}`); } catch { return; }
-    if (t.state !== 'running' && t.state !== 'queued') { clearInterval(activityTimer); openTask(id); return; } // finished: show the answer
-    if (!document.getElementById('alog')) { if (t.activity) openTask(id); return; } // it started reporting
-    updateActivity(t.activity);
+    try { t = await getJson(`/api/task?${new URLSearchParams({ id, after: list?.dataset.lines ?? 0 })}`); } catch { return; }
+    if (activityTimer !== timer) return; // the window moved on (closed, or another task) while this was asked
+    if (!isLive(t)) { clearInterval(activityTimer); openTask(id, { activityOpen: true }); return; } // finished: show the answer
+    if (!list) { if (t.activity) openTask(id); return; } // it started logging
+    appendActivity(t.activity);
   }, 2000);
+  activityTimer = timer;
 }
-function updateActivity(a) {
+function appendActivity(a) {
   const list = document.getElementById('alog');
   if (!list || !a) return;
   document.getElementById('alog-counts').textContent = activityCounts(a);
-  const fresh = a.logged - Number(list.dataset.logged);
-  if (fresh <= 0) return;
-  const show = () => { list.innerHTML = activityItems(a); list.dataset.logged = a.logged; list.scrollTop = 0; document.getElementById('alog-new').hidden = true; };
-  if (list.scrollTop < 8) show();
-  else { const b = document.getElementById('alog-new'); b.textContent = `${plural(fresh, 'new step')} ↑`; b.hidden = false; b.onclick = show; }
+  if (!a.items.length || a.after !== Number(list.dataset.lines)) return; // nothing new, or an answer to an older request
+  const follow = atBottom(list);
+  if (!Number(list.dataset.lines)) list.innerHTML = ''; // the "Nothing logged" line
+  list.insertAdjacentHTML('beforeend', activityRows(a.items));
+  list.dataset.lines = a.lines;
+  const b = document.getElementById('alog-new');
+  if (follow) { list.scrollTop = list.scrollHeight; return; }
+  // Lines added below do not move what you are reading; say they are there.
+  b.dataset.count = Number(b.dataset.count || 0) + a.items.length;
+  b.textContent = `${plural(Number(b.dataset.count), 'new step')} ↓`;
+  b.hidden = false;
+  b.onclick = () => { list.scrollTop = list.scrollHeight; };
 }
 
-async function openTask(id) {
+let openSeq = 0;
+async function openTask(id, { activityOpen = false } = {}) {
   const dlg = document.getElementById('task'), body = document.getElementById('task-body');
+  const seq = ++openSeq; // only the latest request may fill the window
+  clearInterval(activityTimer);
+  activityTimer = null;
   document.getElementById('task-title').textContent = 'Task';
   body.innerHTML = '<div class="empty">Loading…</div>';
   if (!dlg.open) dlg.showModal();
@@ -690,7 +719,9 @@ async function openTask(id) {
     const res = await api(`/api/task?${new URLSearchParams({ id })}`);
     if (!res.ok) throw new Error(res.status === 404 ? 'this task is no longer stored' : `HTTP ${res.status}`);
     t = await res.json();
+    if (seq !== openSeq) return;
   } catch (e) {
+    if (seq !== openSeq) return;
     const r = lastTasks?.items.find((x) => x.id === id);
     body.innerHTML = `<div class="empty">Could not load the task: ${esc(e.message)}.</div>${r ? `<h3>Prompt (first 160 characters)</h3><pre>${esc(r.promptPreview)}</pre>` : ''}`;
     return;
@@ -709,9 +740,10 @@ async function openTask(id) {
       ${wt ? `<dt>Worktree</dt><dd><code>${esc(wt.branch)}</code> ${wt.removed ? '<span class="sub">removed</span>' : ''} ${wt.files.length ? `· ${plural(wt.files.length, 'file')} changed` : ''}${wt.sensitiveFiles.length ? ` · <span class="warn">▲ sensitive: ${esc(wt.sensitiveFiles.join(', '))}</span>` : ''}</dd>` : ''}
     </dl>
     ${t.warnings.length ? `<h3>Warnings</h3><pre>${esc(t.warnings.join('\n'))}</pre>` : ''}
-    ${activitySection(t)}
+    ${isLive(t) ? activitySection(t) : ''}
     <h3>Prompt</h3><pre>${esc(t.prompt)}</pre>
     <h3>Answer</h3><pre>${t.output ? esc(t.output) : '<span class="sub">(none)</span>'}</pre>
+    ${isLive(t) ? '' : activitySection(t, { open: activityOpen })}
     ${wt?.review && !wt.removed ? `<button class="copy" data-copy="${esc(wt.review)}">Copy diff command</button> ` : ''}<button class="copy" data-copy="${esc(t.prompt)}">Copy prompt</button>`;
   if (t.state === 'running' || t.state === 'queued') followTask(id); else clearInterval(activityTimer);
 }
@@ -734,7 +766,7 @@ document.getElementById('t-size').addEventListener('change', (e) => { setTaskFil
 document.getElementById('wt-state').addEventListener('change', (e) => { state.wt.state = e.target.value; state.wt.page = 1; last && renderWorktrees(last); });
 document.getElementById('wt-tool').addEventListener('change', (e) => { state.wt.tool = e.target.value; state.wt.page = 1; last && renderWorktrees(last); });
 document.getElementById('task-close').addEventListener('click', () => document.getElementById('task').close());
-document.getElementById('task').addEventListener('close', () => clearInterval(activityTimer));
+document.getElementById('task').addEventListener('close', () => { clearInterval(activityTimer); activityTimer = null; });
 // The activity cell is a div acting as a button: Enter and Space open it too.
 document.addEventListener('keydown', (e) => {
   const el = e.target.closest?.('[data-task][role="button"]');

@@ -6,12 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { readUsage } from './log.js';
 import { summarise, latestCodexLimits, taskPage } from './summary.js';
 import { loadConfig, configPath } from './config.js';
-import { listTasks, readTask, queueStatus, TERMINAL, freshCodexLimits } from './tasks.js';
+import { listTasks, readTask, readActivity, queueStatus, TERMINAL, freshCodexLimits } from './tasks.js';
 import { openWorktrees, autoCleanup } from './cleanup.js';
 import { claudeLimitsHint, readBridgeSeen } from './claude-limits.js';
 import { targetStatus } from './targets.js';
 import { statuslineInstalled } from './statusline.js';
-import { progressView, activityLog, QUIET_SECONDS } from './progress.js';
+import { progressView, QUIET_SECONDS } from './progress.js';
 
 const PAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dashboard', 'index.html');
 
@@ -60,7 +60,8 @@ export function buildTaskPage({ days = 30, project = '', tool = '', outcome = ''
 
 // One task in full, for the dashboard's detail view: the whole prompt and the target's answer.
 // Both are shown as text (the answer is target output); the id must be a task id (readTask checks).
-export function taskDetail(id) {
+// `after`: the number of activity log lines the page already has; only later ones are sent.
+export function taskDetail(id, { after = 0 } = {}) {
   const t = readTask(id);
   if (!t) return null;
   const wt = t.worktree;
@@ -70,8 +71,8 @@ export function taskDetail(id) {
     prompt: t.prompt, output: t.result?.output ?? '', error: t.result?.error ?? null, usage: t.result?.usage ?? null,
     modelsReported: t.evidence?.models ?? [], blockedHosts: t.egress?.denied ?? [], warnings: t.warnings ?? [],
     worktree: wt ? { branch: wt.branch, changed: wt.changed ?? null, removed: !!wt.removed, files: wt.files ?? [], sensitiveFiles: wt.sensitiveFiles ?? [], review: wt.review ?? null, apply: wt.apply ?? null } : null,
-    // What the target did, newest first (tasks from before progress was recorded have none).
-    activity: t.progress ? { ...activityLog(t.progress), ...progressView(t.progress, { state: t.state, startedAt: t.startedAt, finishedAt: t.finishedAt, wallMs: t.wallMs }) } : null,
+    // What the target did, oldest first, from line `after` of its log (tasks from before the log have none).
+    activity: t.progress ? { ...readActivity(t.id, { after }), after, ...progressView(t.progress, { state: t.state, startedAt: t.startedAt, finishedAt: t.finishedAt, wallMs: t.wallMs }) } : null,
   };
 }
 
@@ -130,7 +131,8 @@ export function createServer(port, token) {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(body);
       } else if (url.pathname === '/api/task') {
-        const detail = taskDetail(url.searchParams.get('id'));
+        const after = Number(url.searchParams.get('after'));
+        const detail = taskDetail(url.searchParams.get('id'), { after: Number.isInteger(after) && after > 0 ? after : 0 });
         res.writeHead(detail ? 200 : 404, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify(detail ?? { error: 'no such task' }));
       } else if (url.pathname === '/') {

@@ -18,7 +18,7 @@ import { latestCodexLimits } from './summary.js';
 import { collectEvidence } from './evidence.js';
 import { clampRunUsage } from './num.js';
 import { stopStrays } from './strays.js';
-import { createProgress, progressView, shortDuration } from './progress.js';
+import { createProgress, progressView, shortDuration, parseActivityLog, cleanLabel, MAX_LOG } from './progress.js';
 
 // A task lives in tasks/<id>.json and moves queued → running → done | failed | timeout.
 // `refused` is terminal and set before anything runs. Workers are separate processes, so tasks
@@ -43,6 +43,36 @@ export function capOutput(output, id) {
   return `${output.slice(0, MAX_ANSWER_CHARS)}\n[nuncius: answer cut at ${MAX_ANSWER_CHARS} of ${output.length} characters; the full output is in ${path.join(runsDir(), `${id}.out`)}]`;
 }
 const taskPath = (id) => path.join(tasksDir(), `${id}.json`);
+
+// A task's activity log: one JSON line per step, appended as it happens (so it survives a crashed
+// worker), with a start and an end marker. Removed with the task's other run files (src/retention.js).
+export const activityPath = (id) => path.join(runsDir(), `${id}.activity.jsonl`);
+function appendActivity(id, entry) {
+  try {
+    fs.mkdirSync(runsDir(), { recursive: true });
+    fs.appendFileSync(activityPath(id), `${JSON.stringify(entry)}\n`);
+  } catch {
+    // the log is a convenience: the task goes on without it
+  }
+}
+// The log from line `after` on, oldest first; { items: [], lines: 0 } when there is none.
+export function readActivity(id, { after = 0 } = {}) {
+  if (!ID_RE.test(String(id))) return { items: [], lines: 0 };
+  let text = '';
+  try {
+    text = fs.readFileSync(activityPath(id), 'utf8');
+  } catch {
+    // no log (an older task, or one that never ran)
+  }
+  return parseActivityLog(text, { after });
+}
+const TOOL_NAMES = { codex: 'Codex', cursor: 'Cursor', claude: 'Claude' };
+const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const progressCounts = (p) => `${counted(p?.steps ?? 0, 'step')} · ${counted(p?.filesEdited ?? 0, 'file')} edited · ${counted(p?.commands ?? 0, 'command')}`;
+const secondsSince = (iso, now = Date.now()) => {
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? Math.max(0, Math.round((now - ms) / 1000)) : 0;
+};
 
 // Only a well-formed record counts as a task: a damaged file (truncated, hand-edited, `null`) is
 // ignored rather than crashing the queue code that reads every task under the lock.
@@ -199,6 +229,7 @@ function reap(tasks, config) {
         promptPreview: t.prompt.slice(0, 160),
       });
     }
+    if (t.state === 'running') appendActivity(t.id, { s: secondsSince(t.startedAt, now), kind: 'end', what: `Stopped: ${error} · ${progressCounts(t.progress)}` });
     Object.assign(t, updateTask(t.id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error } }));
   }
   return tasks;
@@ -695,8 +726,16 @@ async function runTask(id, { echoStderr }, ctx) {
   // What the target is doing, from its own event stream: kept in the task file (at most once a
   // second, under the queue lock so it never overwrites a state the reaper set) and, from the CLI,
   // printed as it happens.
+  // The full log goes to its own file; past MAX_LOG steps they are only counted (a looping target cannot fill the disk).
+  let logLines = 0;
+  const logStep = (entry) => {
+    if (logLines < MAX_LOG) appendActivity(id, entry);
+    else if (logLines === MAX_LOG) appendActivity(id, { s: entry.s, kind: 'note', what: `The log is full (${MAX_LOG} steps): later steps are counted, not logged` });
+    logLines++;
+  };
+  appendActivity(id, { s: 0, kind: 'start', what: `Started · ${TOOL_NAMES[task.target] ?? task.target}${task.model ? ` · ${task.model}` : ''}` });
   const progress = createProgress({
-    target: task.target, base: task.worktree.path, timeoutSeconds: taskTimeoutSeconds(config),
+    target: task.target, base: task.worktree.path, timeoutSeconds: taskTimeoutSeconds(config), onLog: logStep,
     onActivity: echoStderr ? (a) => process.stderr.write(`[nuncius] ${shortDuration((Date.now() - ctx.startedAt) / 1000)} ${a.what}\n`) : undefined,
   });
   // Saved a moment after an event, so a burst of them lands in one write, and then at most once a second.
@@ -857,13 +896,16 @@ async function runTask(id, { echoStderr }, ctx) {
       commitError = `target finished but committing its work failed: ${err.message}`;
     }
   }
+  const endState = commitError ? 'failed' : res.timedOut ? 'timeout' : res.ok ? 'done' : 'failed';
+  const ending = endState === 'done' ? 'Done' : endState === 'timeout' ? `Timed out after ${shortDuration(taskTimeoutSeconds(config))}` : `Failed: ${cleanLabel(commitError ?? error ?? 'unknown error').slice(0, 80)}`;
+  appendActivity(id, { s: Math.round(wallMs / 1000), kind: 'end', what: `${ending} · ${progressCounts(progress.snapshot())}` });
   return updateTask(id, {
     worktree,
     egress,
     evidence,
     progress: progress.snapshot(),
     ...(warnings.length ? { warnings } : {}),
-    state: commitError ? 'failed' : res.timedOut ? 'timeout' : res.ok ? 'done' : 'failed',
+    state: endState,
     finishedAt: new Date().toISOString(),
     wallMs,
     result: { ok: res.ok && !res.timedOut && !commitError, output: capOutput(res.output, id), error: commitError ?? error, exitCode: res.exitCode, usage: res.usage, limits: res.limits },

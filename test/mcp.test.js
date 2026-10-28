@@ -164,6 +164,11 @@ test('a running task reports its progress; a finished one keeps it', async () =>
   assert.equal(done.state, 'done');
   assert.equal(done.progress.filesEdited, 1);
   assert.ok(done.progress.elapsedSeconds >= 2);
+  // The full activity log: a start marker, every step, and an end marker with the counts.
+  const log = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${started.id}.activity.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(log.map((e) => e.kind), ['start', 'command', 'edit', 'end']);
+  assert.equal(log[0].what, 'Started · Cursor');
+  assert.equal(log.at(-1).what, 'Done · 2 steps · 1 file edited · 1 command');
 });
 
 test('queue respects the per-target limit and runs FIFO', async () => {
@@ -191,6 +196,9 @@ test('tasks are killed after the timeout', async () => {
   assert.equal(t.progress.commands, 1);
   const out = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${t.id}.out`), 'utf8');
   assert.match(out, /shellToolCall/);
+  const log = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${t.id}.activity.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(log.at(-1).kind, 'end');
+  assert.match(log.at(-1).what, /^Timed out after \d+ s · 1 step · 0 files edited · 1 command$/);
 });
 
 test('nested nuncius calls are refused (recursion guard)', async () => {

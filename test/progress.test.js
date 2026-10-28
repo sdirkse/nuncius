@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createProgress, progressView, cleanLabel, shortDuration, shellLabel, activityLog, QUIET_SECONDS, MAX_RECENT } from '../src/progress.js';
+import { createProgress, progressView, cleanLabel, shortDuration, shellLabel, parseActivityLog, QUIET_SECONDS, MAX_LOG } from '../src/progress.js';
 
 const feedAll = (p, events) => events.forEach((e) => p.feed(typeof e === 'string' ? e : JSON.stringify(e)));
 
@@ -110,33 +110,47 @@ test('shortDuration', () => {
   assert.equal(shortDuration(NaN), '?');
 });
 
-test('the activity log keeps the latest steps, newest first, with seconds since the start', () => {
+test('every logged step goes to onLog with seconds since the start; finished steps and repeated thinking do not', () => {
   let t = 1000;
-  const p = createProgress({ target: 'claude', now: () => t });
+  const log = [];
+  const p = createProgress({ target: 'claude', now: () => t, onLog: (e) => log.push(e) });
   const bash = (cmd) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: cmd } }] } });
   const think = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '...' }] } });
   p.feed(think);
   p.feed(think); // a run of thinking chunks is one entry
-  for (let i = 0; i < MAX_RECENT + 10; i++) {
+  for (let i = 0; i < 3; i++) {
     t += 2000;
     p.feed(bash(`step ${i}`));
     p.feed(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result' }] } })); // finished: not logged again
   }
-  const snap = p.snapshot();
-  assert.equal(snap.recent.length, MAX_RECENT);
-  assert.equal(snap.logged, MAX_RECENT + 11, 'one thinking entry and every command');
-  const log = activityLog(snap);
-  assert.equal(log.items.length, MAX_RECENT);
-  assert.deepEqual(log.items[0], { s: (MAX_RECENT + 10) * 2, kind: 'command', what: `Shell: step ${MAX_RECENT + 9}` });
-  assert.equal(log.items.at(-1).what, 'Shell: step 10');
-  assert.equal(log.logged, MAX_RECENT + 11);
-  // The snapshot is a copy: later events do not change what was saved.
-  p.feed(bash('later'));
-  assert.equal(snap.recent.at(-1).what, `Shell: step ${MAX_RECENT + 9}`);
+  assert.deepEqual(log, [
+    { s: 0, kind: 'thinking', what: 'thinking' },
+    { s: 2, kind: 'command', what: 'Shell: step 0' },
+    { s: 4, kind: 'command', what: 'Shell: step 1' },
+    { s: 6, kind: 'command', what: 'Shell: step 2' },
+  ]);
+  assert.equal(p.snapshot().logged, 4);
+  assert.equal(p.snapshot().recent, undefined, 'the log lives in its own file, not in the task record');
+  // A throwing listener does not stop the run.
+  assert.doesNotThrow(() => createProgress({ target: 'claude', onLog: () => { throw new Error('x'); } }).feed(bash('y')));
 });
 
-test('activityLog cleans a damaged log instead of passing it on', () => {
-  const log = activityLog({ recent: [null, 'x', { s: -1, kind: 'edit', what: 'a' }, { s: 3.4, kind: '<script>', what: 'b\u001b[2Jc' }, { s: 'NaN', what: 'd' }], logged: 'many' });
-  assert.deepEqual(log, { items: [{ s: 3, kind: 'tool', what: 'b [2Jc' }], logged: 1 });
-  assert.deepEqual(activityLog(null), { items: [], logged: 0 });
+test('parseActivityLog: oldest first, from a line on, damaged lines skipped but counted', () => {
+  const text = [
+    { s: 0, kind: 'start', what: 'Started · Cursor' },
+    { s: 5, kind: 'command', what: 'Shell: ls' },
+    'not json',
+    { s: 3.4, kind: '<script>', what: 'b\u001b[2Jc' },
+    { s: -1, kind: 'edit', what: 'a' },
+    { s: 9, kind: 'end', what: 'Done · 1 step' },
+  ].map((e) => (typeof e === 'string' ? e : JSON.stringify(e))).join('\n') + '\n';
+  const all = parseActivityLog(text);
+  assert.equal(all.lines, 6);
+  assert.deepEqual(all.items.map((e) => [e.s, e.kind, e.what]), [[0, 'start', 'Started · Cursor'], [5, 'command', 'Shell: ls'], [3, 'tool', 'b [2Jc'], [9, 'end', 'Done · 1 step']]);
+  const tail = parseActivityLog(text, { after: 4 });
+  assert.equal(tail.lines, 6);
+  assert.deepEqual(tail.items.map((e) => e.kind), ['end']);
+  assert.deepEqual(parseActivityLog(''), { items: [], lines: 0 });
+  assert.deepEqual(parseActivityLog(text, { after: 99 }).items, []);
+  assert.ok(MAX_LOG >= 1000);
 });

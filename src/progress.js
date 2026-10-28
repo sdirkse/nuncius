@@ -8,8 +8,8 @@
 // Only a warning; nothing is stopped for it.
 export const QUIET_SECONDS = 300;
 const MAX_WHAT = 100;
-// The latest steps kept for the dashboard's activity view; older ones only count.
-export const MAX_RECENT = 50;
+// The activity log (runs/<id>.activity.jsonl) keeps at most this many steps; later ones are only counted.
+export const MAX_LOG = 2000;
 
 export function cleanLabel(s) {
   const one = String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -85,14 +85,22 @@ function cursorActivities(ev, base) {
 
 const PARSERS = { claude: claudeActivities, codex: codexActivities, cursor: cursorActivities };
 
-// Feed it the target's stdout lines. `onActivity(activity, progress)` hears each one (the CLI prints them).
-// `base`: the worktree path, cut from the start of file paths.
-export function createProgress({ target, base, timeoutSeconds, now = () => Date.now(), onActivity } = {}) {
+// Feed it the target's stdout lines. `onLog(entry)` gets each logged step as { s: seconds since start,
+// kind, what } (the worker appends it to the activity log); `onActivity(activity, progress)` hears the
+// same steps (the CLI prints them). `base`: the worktree path, cut from the start of file paths.
+export function createProgress({ target, base, timeoutSeconds, now = () => Date.now(), onActivity, onLog } = {}) {
   const parse = PARSERS[target] ?? (() => []);
   const files = new Set();
   const started = now();
-  // recent: the latest MAX_RECENT activities as { s: seconds since start, kind, what }; logged: how many there were in all.
-  const p = { startedAt: new Date(started).toISOString(), timeoutSeconds: timeoutSeconds ?? null, lastActivityAt: null, lastActivity: null, steps: 0, filesEdited: 0, commands: 0, recent: [], logged: 0 };
+  // logged: how many activities went to the log (or would have, past MAX_LOG).
+  const p = { startedAt: new Date(started).toISOString(), timeoutSeconds: timeoutSeconds ?? null, lastActivityAt: null, lastActivity: null, steps: 0, filesEdited: 0, commands: 0, logged: 0 };
+  const tell = (fn, ...args) => {
+    try {
+      fn?.(...args);
+    } catch {
+      // a listener must never break the run
+    }
+  };
   return {
     feed(line) {
       const text = String(line).trim();
@@ -125,37 +133,39 @@ export function createProgress({ target, base, timeoutSeconds, now = () => Date.
         const told = !!what && a.kind !== 'done' && !((a.kind === 'thinking' || a.kind === 'message') && what === p.lastActivity);
         p.lastActivity = what || p.lastActivity;
         if (told) {
-          p.recent.push({ s: Math.max(0, Math.round((now() - started) / 1000)), kind: a.kind, what });
-          if (p.recent.length > MAX_RECENT) p.recent.shift();
           p.logged++;
-        }
-        if (onActivity && told) {
-          try {
-            onActivity({ kind: a.kind, what }, p);
-          } catch {
-            // a listener must never break the run
-          }
+          tell(onLog, { s: Math.max(0, Math.round((now() - started) / 1000)), kind: a.kind, what });
+          tell(onActivity, { kind: a.kind, what }, p);
         }
       }
       return true;
     },
-    snapshot: () => ({ ...p, recent: [...p.recent] }),
+    snapshot: () => ({ ...p }),
   };
 }
 
 // The progress as callers see it, computed at read time. `finishedAt`: elapsed stops there.
-// The activity log as the dashboard shows it, newest first. Labels are cleaned again: the task file is
-// nuncius's own, but a damaged one must not put anything odd on the page.
-const KINDS = new Set(['edit', 'command', 'read', 'tool', 'message', 'thinking']);
-export function activityLog(progress) {
-  const list = Array.isArray(progress?.recent) ? progress.recent : [];
-  const items = list
-    .filter((e) => e && typeof e === 'object' && Number.isFinite(e.s) && e.s >= 0)
-    .slice(-MAX_RECENT)
-    .map((e) => ({ s: Math.round(e.s), kind: KINDS.has(e.kind) ? e.kind : 'tool', what: cleanLabel(e.what) }))
-    .reverse();
-  const logged = Number.isInteger(progress?.logged) && progress.logged >= items.length ? progress.logged : items.length;
-  return { items, logged };
+// The activity log as the dashboard shows it, oldest first: the lines of runs/<id>.activity.jsonl from
+// `after` on. Labels are cleaned again (the file is nuncius's own, but a damaged one must not put anything
+// odd on the page), and a line that is not a well-formed entry is skipped but still counted, so `after`
+// stays a line number.
+const KINDS = new Set(['start', 'end', 'note', 'edit', 'command', 'read', 'tool', 'message', 'thinking']);
+export function parseActivityLog(text, { after = 0 } = {}) {
+  const lines = String(text ?? '').split('\n');
+  if (lines.at(-1) === '') lines.pop(); // the newline after the last entry
+  const from = Number.isInteger(after) && after > 0 ? after : 0;
+  const items = [];
+  for (const line of lines.slice(from, from + MAX_LOG + 10)) {
+    let e;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!e || typeof e !== 'object' || !Number.isFinite(e.s) || e.s < 0) continue;
+    items.push({ s: Math.round(e.s), kind: KINDS.has(e.kind) ? e.kind : 'tool', what: cleanLabel(e.what) });
+  }
+  return { items, lines: lines.length };
 }
 
 export function progressView(progress, { state, startedAt, finishedAt, wallMs, now = Date.now() } = {}) {

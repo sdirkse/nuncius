@@ -348,15 +348,20 @@ test('the dashboard survives a malformed request, bad records, and uppercase Hos
     const live = await get('/api/live');
     assert.equal(live.status, 200, 'a damaged task file does not break /api/live');
     assert.deepEqual(Object.keys(JSON.parse(live.body)).sort(), ['activeTasks', 'generatedAt', 'queue']);
-    // A task's activity log comes back cleaned, newest first.
+    // A task's activity log comes back cleaned, oldest first, and from a given line on.
     const logged = '11111111-1111-4111-8111-111111111111';
     fs.writeFileSync(path.join(tasksDir, `${logged}.json`), JSON.stringify({ id: logged, state: 'done', target: 'cursor', prompt: 'p', startedAt: '2026-10-28T08:00:00.000Z', finishedAt: '2026-10-28T08:01:00.000Z', wallMs: 60000,
-      progress: { startedAt: '2026-10-28T08:00:00.000Z', lastActivityAt: '2026-10-28T08:00:50.000Z', lastActivity: 'edit a.js', steps: 2, filesEdited: 1, commands: 1, logged: 2,
-        recent: [{ s: 5, kind: 'command', what: 'Shell: ls' }, { s: 50, kind: 'edit', what: 'edit a.js\u202e' }] } }));
+      progress: { startedAt: '2026-10-28T08:00:00.000Z', lastActivityAt: '2026-10-28T08:00:50.000Z', lastActivity: 'edit a.js', steps: 2, filesEdited: 1, commands: 1, logged: 2 } }));
+    fs.mkdirSync(path.join(env.NUNCIUS_HOME, 'runs'), { recursive: true });
+    fs.writeFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${logged}.activity.jsonl`), [{ s: 0, kind: 'start', what: 'Started' }, { s: 5, kind: 'command', what: 'Shell: ls' }, { s: 50, kind: 'edit', what: 'edit a.js\u202e' }, { s: 60, kind: 'end', what: 'Done' }].map((e) => JSON.stringify(e)).join('\n') + '\n');
     const detail = JSON.parse((await get(`/api/task?id=${logged}`)).body);
-    assert.deepEqual(detail.activity.items, [{ s: 50, kind: 'edit', what: 'edit a.js' }, { s: 5, kind: 'command', what: 'Shell: ls' }]);
+    assert.deepEqual(detail.activity.items.map((e) => e.what), ['Started', 'Shell: ls', 'edit a.js', 'Done']);
+    assert.equal(detail.activity.lines, 4);
     assert.equal(detail.activity.filesEdited, 1);
     assert.equal(detail.activity.elapsedSeconds, 60);
+    const more = JSON.parse((await get(`/api/task?id=${logged}&after=2`)).body);
+    assert.deepEqual([more.activity.after, more.activity.items.map((e) => e.kind)], [2, ['edit', 'end']]);
+    assert.equal(JSON.parse((await get(`/api/task?id=${logged}&after=-3`)).body).activity.after, 0, 'odd offsets fall back to the start');
     const tasks = await get('/api/tasks?page=9&size=25&q=%00%ff');
     assert.equal(tasks.status, 200, 'odd paging and search input is answered, not a crash');
     assert.deepEqual(Object.keys(JSON.parse(tasks.body)).sort(), ['items', 'page', 'pages', 'size', 'total']);
