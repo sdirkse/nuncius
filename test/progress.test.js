@@ -136,7 +136,7 @@ test('every logged step goes to onLog with seconds since the start; finished ste
   assert.doesNotThrow(() => createProgress({ target: 'claude', onLog: () => { throw new Error('x'); } }).feed(bash('y')));
 });
 
-test('parseActivityLog: oldest first, from a line on, damaged lines skipped but counted', () => {
+test('parseActivityLog: oldest first, damaged lines skipped', () => {
   const text = [
     { s: 0, kind: 'start', what: 'Started · Cursor' },
     { s: 5, kind: 'command', what: 'Shell: ls' },
@@ -145,13 +145,7 @@ test('parseActivityLog: oldest first, from a line on, damaged lines skipped but 
     { s: -1, kind: 'edit', what: 'a' },
     { s: 9, kind: 'end', what: 'Done · 1 step' },
   ].map((e) => (typeof e === 'string' ? e : JSON.stringify(e))).join('\n') + '\n';
-  const all = parseActivityLog(text);
-  assert.equal(all.lines, 6);
-  assert.deepEqual(all.items.map((e) => [e.s, e.kind, e.what]), [[0, 'start', 'Started · Cursor'], [5, 'command', 'Shell: ls'], [3, 'tool', 'b [2Jc'], [9, 'end', 'Done · 1 step']]);
-  const tail = parseActivityLog(text, { after: 4 });
-  assert.equal(tail.lines, 6);
-  assert.deepEqual(tail.items.map((e) => e.kind), ['end']);
-  assert.deepEqual(parseActivityLog(''), { items: [], lines: 0 });
-  assert.deepEqual(parseActivityLog(text, { after: 99 }).items, []);
+  assert.deepEqual(parseActivityLog(text).map((e) => [e.s, e.kind, e.what]), [[0, 'start', 'Started · Cursor'], [5, 'command', 'Shell: ls'], [3, 'tool', 'b [2Jc'], [9, 'end', 'Done · 1 step']]);
+  assert.deepEqual(parseActivityLog(''), []);
   assert.ok(MAX_LOG >= 1000);
 });

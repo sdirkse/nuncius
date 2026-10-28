@@ -662,8 +662,8 @@ const atBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 8;
 function activitySection(t, { open = false } = {}) {
   const a = t.activity;
   if (!a) return '';
-  const rows = a.items.length ? activityRows(a.items) : '<li><span></span><span class="what sub">Nothing logged.</span></li>';
-  const list = `<ol class="alog${isLive(t) ? ' live' : ''}" id="alog" data-lines="${a.lines}">${rows}</ol>`;
+  const rows = a.items.length ? activityRows(a.items) : '<li id="alog-none"><span></span><span class="what sub">Nothing logged.</span></li>';
+  const list = `<ol class="alog${isLive(t) ? ' live' : ''}" id="alog" data-next="${a.next}">${rows}</ol>`;
   if (isLive(t)) return `<div class="alog-head"><h3>Activity</h3><span class="sub" id="alog-counts">${activityCounts(a)}</span><button class="alog-new" id="alog-new" hidden></button></div>${list}`;
   return `<details class="alog-wrap"${open ? ' open' : ''}><summary><h3>Activity</h3><span class="sub">${activityCounts(a)}${t.wallMs != null ? ` · ${fmtDur(t.wallMs)}` : a.elapsedSeconds != null ? ` · ${a.elapsedSeconds < 60 ? `${a.elapsedSeconds} s` : fmtDur(a.elapsedSeconds * 1000)}` : ''}</span></summary>${list}</details>`;
 }
@@ -679,7 +679,7 @@ function followTask(id) {
     if (!document.getElementById('task').open || document.hidden) return;
     const list = document.getElementById('alog');
     let t;
-    try { t = await getJson(`/api/task/activity?${new URLSearchParams({ id, after: list?.dataset.lines ?? 0 })}`); } catch { return; }
+    try { t = await getJson(`/api/task/activity?${new URLSearchParams({ id, from: list?.dataset.next ?? 0 })}`); } catch { return; }
     if (activityTimer !== timer) return; // the window moved on (closed, or another task) while this was asked
     if (!isLive(t)) { clearInterval(activityTimer); openTask(id, { activityOpen: true }); return; } // finished: show the answer
     if (!list) { if (t.activity) openTask(id); return; } // it started logging
@@ -691,11 +691,12 @@ function appendActivity(a) {
   const list = document.getElementById('alog');
   if (!list || !a) return;
   document.getElementById('alog-counts').textContent = activityCounts(a);
-  if (!a.items.length || a.after !== Number(list.dataset.lines)) return; // nothing new, or an answer to an older request
+  if (a.from !== Number(list.dataset.next)) return; // an answer to an older request
+  list.dataset.next = a.next;
+  if (!a.items.length) return;
   const follow = atBottom(list);
-  if (!Number(list.dataset.lines)) list.innerHTML = ''; // the "Nothing logged" line
+  document.getElementById('alog-none')?.remove();
   list.insertAdjacentHTML('beforeend', activityRows(a.items));
-  list.dataset.lines = a.lines;
   const b = document.getElementById('alog-new');
   if (follow) { list.scrollTop = list.scrollHeight; return; }
   // Lines added below do not move what you are reading; say they are there.

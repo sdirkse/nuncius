@@ -88,16 +88,26 @@ export function taskProgress(t) {
   }
   return t?.progress ?? null;
 }
-// The log from line `after` on, oldest first; { items: [], lines: 0 } when there is none.
-export function readActivity(id, { after = 0 } = {}) {
-  if (!ID_RE.test(String(id))) return { items: [], lines: 0 };
-  let text = '';
+// The log from byte `from` on, oldest first, whole lines only; `next` is where the following read starts.
+// So a page that polls reads only what was appended since its last poll.
+export function readActivity(id, { from = 0 } = {}) {
+  if (!ID_RE.test(String(id))) return { items: [], next: 0 };
+  let fd;
   try {
-    text = fs.readFileSync(activityPath(id), 'utf8');
+    fd = fs.openSync(activityPath(id), 'r');
   } catch {
-    // no log (an older task, or one that never ran)
+    return { items: [], next: 0 }; // no log (an older task, or one that never ran)
   }
-  return parseActivityLog(text, { after });
+  try {
+    const { size } = fs.fstatSync(fd);
+    const start = Math.min(from, size);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    const end = buf.lastIndexOf(0x0a) + 1; // a line still being written waits for the next read
+    return { items: parseActivityLog(buf.subarray(0, end).toString('utf8')), next: start + end };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const progressCounts = (p) => `${counted(p?.steps ?? 0, 'step')} · ${counted(p?.filesEdited ?? 0, 'file')} edited · ${counted(p?.commands ?? 0, 'command')}`;

@@ -65,8 +65,8 @@ export function buildTaskPage({ days = 30, project = '', tool = '', outcome = ''
 
 // One task in full, for the dashboard's detail view: the whole prompt and the target's answer.
 // Both are shown as text (the answer is target output); the id must be a task id (readTask checks).
-// `after`: the number of activity log lines the page already has; only later ones are sent.
-export function taskDetail(id, { after = 0 } = {}) {
+// `from`: where in the activity log the page is (the `next` it was given); only later lines are sent.
+export function taskDetail(id, { from = 0 } = {}) {
   const t = readTask(id);
   if (!t) return null;
   const wt = t.worktree;
@@ -76,20 +76,20 @@ export function taskDetail(id, { after = 0 } = {}) {
     prompt: t.prompt, output: t.result?.output ?? '', error: t.result?.error ?? null, usage: t.result?.usage ?? null,
     modelsReported: t.evidence?.models ?? [], blockedHosts: t.egress?.denied ?? [], warnings: t.warnings ?? [],
     worktree: wt ? { branch: wt.branch, changed: wt.changed ?? null, removed: !!wt.removed, files: wt.files ?? [], sensitiveFiles: wt.sensitiveFiles ?? [], review: wt.review ?? null, apply: wt.apply ?? null } : null,
-    // What the target did, oldest first, from line `after` of its log (tasks from before the log have none).
-    activity: activityOf(t, after),
+    // What the target did, oldest first, from `from` in its log (tasks from before the log have none).
+    activity: activityOf(t, from),
   };
 }
 
 // Only what the task window needs every 2 s while a task runs: its state and the new log lines.
-export function taskActivity(id, { after = 0 } = {}) {
+export function taskActivity(id, { from = 0 } = {}) {
   const t = readTask(id);
-  return t ? { id: t.id, state: t.state, activity: activityOf(t, after) } : null;
+  return t ? { id: t.id, state: t.state, activity: activityOf(t, from) } : null;
 }
 
-function activityOf(t, after) {
+function activityOf(t, from) {
   const p = taskProgress(t);
-  return p ? { ...readActivity(t.id, { after }), after, ...progressView(p, { state: t.state, startedAt: t.startedAt, finishedAt: t.finishedAt, wallMs: t.wallMs }) } : null;
+  return p ? { ...readActivity(t.id, { from }), from, ...progressView(p, { state: t.state, startedAt: t.startedAt, finishedAt: t.finishedAt, wallMs: t.wallMs }) } : null;
 }
 
 // Only answer requests addressed to loopback by name, so a malicious site cannot read the
@@ -147,9 +147,9 @@ export function createServer(port, token) {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(body);
       } else if (url.pathname === '/api/task' || url.pathname === '/api/task/activity') {
-        const after = Number(url.searchParams.get('after'));
+        const from = Number(url.searchParams.get('from'));
         const read = url.pathname === '/api/task' ? taskDetail : taskActivity;
-        const detail = read(url.searchParams.get('id'), { after: Number.isInteger(after) && after > 0 ? after : 0 });
+        const detail = read(url.searchParams.get('id'), { from: Number.isSafeInteger(from) && from > 0 ? from : 0 });
         res.writeHead(detail ? 200 : 404, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify(detail ?? { error: 'no such task' }));
       } else if (url.pathname === '/') {

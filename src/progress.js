@@ -144,17 +144,13 @@ export function createProgress({ target, base, timeoutSeconds, now = () => Date.
   };
 }
 
-// The activity log as the dashboard shows it, oldest first: the lines of runs/<id>.activity.jsonl from
-// `after` on. Labels are cleaned again (the file is nuncius's own, but a damaged one must not put anything
-// odd on the page), and a line that is not a well-formed entry is skipped but still counted, so `after`
-// stays a line number.
+// Lines of runs/<id>.activity.jsonl as the dashboard shows them, oldest first. Labels are cleaned again
+// (the file is nuncius's own, but a damaged one must not put anything odd on the page), and a line that
+// is not a well-formed entry is skipped.
 const KINDS = new Set(['start', 'end', 'note', 'edit', 'command', 'read', 'tool', 'message', 'thinking']);
-export function parseActivityLog(text, { after = 0 } = {}) {
-  const lines = String(text ?? '').split('\n');
-  if (lines.at(-1) === '') lines.pop(); // the newline after the last entry
-  const from = Number.isInteger(after) && after > 0 ? after : 0;
+export function parseActivityLog(text) {
   const items = [];
-  for (const line of lines.slice(from, from + MAX_LOG + 10)) {
+  for (const line of String(text ?? '').split('\n').slice(0, MAX_LOG + 10)) {
     let e;
     try {
       e = JSON.parse(line);
@@ -164,7 +160,7 @@ export function parseActivityLog(text, { after = 0 } = {}) {
     if (!e || typeof e !== 'object' || !Number.isFinite(e.s) || e.s < 0) continue;
     items.push({ s: Math.round(e.s), kind: KINDS.has(e.kind) ? e.kind : 'tool', what: cleanLabel(e.what) });
   }
-  return { items, lines: lines.length };
+  return items;
 }
 
 // The progress as callers see it, computed at read time. `finishedAt`: elapsed stops there.
