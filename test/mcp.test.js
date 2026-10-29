@@ -287,6 +287,10 @@ test('MCP callers cannot pick the project used for budgets', async () => {
 test('recursion guard: a target that unsets the depth and points NUNCIUS_HOME elsewhere is still refused', async () => {
   const probe = path.join(home, 'nested.sh');
   const fakeHome = path.join(home, 'attacker-home');
+  // The nested run's own data folder names the fake Codex: it must be refused as nested, not because
+  // this machine has no Codex.
+  fs.mkdirSync(fakeHome);
+  fs.writeFileSync(path.join(fakeHome, 'config.json'), JSON.stringify({ codexBin: path.join(fixtures, 'fake-codex.js') }));
   fs.writeFileSync(
     probe,
     `#!/bin/sh\nmkdir -p "${fakeHome}"\n` +
@@ -305,6 +309,8 @@ test('recursion guard: a target that unsets the depth and points NUNCIUS_HOME el
 
 test('recursion guard: a detached (reparented) nested nuncius is caught by the canary', async () => {
   const out = path.join(home, 'detached.out');
+  fs.mkdirSync(path.join(home, 'attacker-home2'));
+  fs.writeFileSync(path.join(home, 'attacker-home2', 'config.json'), JSON.stringify({ codexBin: path.join(fixtures, 'fake-codex.js') })); // see above
   const probe = path.join(home, 'detach.mjs');
   fs.writeFileSync(
     probe,
@@ -353,6 +359,7 @@ test('usage includes Claude limits, or why they are missing', async () => {
 });
 
 test('list_targets: limits are an object or null for every target, with a hint when missing', async () => {
+  writeConfig({ claudeBin: path.join(fixtures, 'fake-claude.js') });
   const { call } = await startServer();
   const res = (await call('list_targets', {})).structuredContent;
   const claude = res.targets.find((t) => t.name === 'claude');

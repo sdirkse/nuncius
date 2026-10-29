@@ -488,6 +488,7 @@ test('the bridge records each run, so nuncius can say why Claude limits are miss
   assert.match(claudeLimitsHint({ installed: false, seen: null }), /nuncius install-statusline/);
   assert.match(claudeLimitsHint({ installed: true, seen: null }), /has not run yet/);
   assert.match(claudeLimitsHint({ installed: true, seen: { at: 'x', rateLimits: false } }), /Pro and Max/);
+  writeConfig({ claudeBin: path.join(fixtures, 'fake-claude.js') }); // status explains missing limits only when Claude is installed
   const run = (input) => spawnSync(process.execPath, [path.join(root, 'bin', 'nuncius.js'), 'statusline'], { env, input, encoding: 'utf8' });
   run(JSON.stringify({ model: { display_name: 'Opus' } })); // e.g. an API-key session: no rate_limits
   const seen = JSON.parse(fs.readFileSync(path.join(env.NUNCIUS_HOME, 'statusline-seen.json'), 'utf8'));
@@ -658,7 +659,7 @@ test('nuncius setup walks through tools, budgets and connections, and prints eac
   fs.mkdirSync(path.join(fakeHome, '.cursor'), { recursive: true });
   fs.writeFileSync(path.join(fakeHome, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { other: { command: 'x' } } }));
   process.env.CLAUDE_CONFIG_DIR = path.join(fakeHome, '.claude');
-  fs.writeFileSync(path.join(env.NUNCIUS_HOME, 'config.json'), JSON.stringify({ targets: { claude: { bin: path.join(fixtures, 'fake-claude.js') } } }));
+  fs.writeFileSync(path.join(env.NUNCIUS_HOME, 'config.json'), JSON.stringify({ targets: Object.fromEntries(['codex', 'cursor', 'claude'].map((t) => [t, { bin: path.join(fixtures, `fake-${t}.js`) }])) }));
   const { runSetup } = await import('../src/setup.js');
   const answers = [
     '', 'n', '', // use Codex, not Cursor, use Claude
