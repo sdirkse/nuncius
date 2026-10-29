@@ -8,7 +8,7 @@ import { dataDir, runsDir, loadConfig, taskTimeoutSeconds } from './config.js';
 import { appendUsage, readUsage } from './log.js';
 import { checkBudget } from './budget.js';
 import { checkExtraArgs } from './args.js';
-import { TARGETS, isTarget, targetBin, findBin, targetStatus, codexAppServer } from './targets.js';
+import { TARGETS, TOOL_NAMES, isTarget, targetBin, findBin, targetStatus, codexAppServer } from './targets.js';
 import { createWorktree, finishWorktree, removeWorktree, gitVersionProblem, gitCommonDir, gitEnv, worktreesDir } from './worktree.js';
 import { ACCOUNTS, usesAccount, accountsProblem, accountLogin, shareTree, shareRoot, claudeTempBase, stopAccount, reclaim, emptyHome } from './accounts.js';
 import { sandboxAvailable, sandboxWrapper, targetEnv } from './sandbox.js';
@@ -18,6 +18,7 @@ import { latestCodexLimits } from './summary.js';
 import { collectEvidence } from './evidence.js';
 import { clampRunUsage } from './num.js';
 import { stopStrays } from './strays.js';
+import { createProgress, progressView, shortDuration, parseActivityLog, cleanLabel, MAX_LOG } from './progress.js';
 
 // A task lives in tasks/<id>.json and moves queued → running → done | failed | timeout.
 // `refused` is terminal and set before anything runs. Workers are separate processes, so tasks
@@ -27,6 +28,9 @@ export const TERMINAL = new Set(['done', 'failed', 'timeout', 'refused']);
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NUNCIUS_BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'nuncius.js');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A running task's progress is written to its file at most this often.
+const PROGRESS_SAVE_MS = 1000;
+const PROGRESS_BATCH_MS = 250;
 
 export const tasksDir = () => path.join(dataDir(), 'tasks');
 
@@ -39,6 +43,78 @@ export function capOutput(output, id) {
   return `${output.slice(0, MAX_ANSWER_CHARS)}\n[nuncius: answer cut at ${MAX_ANSWER_CHARS} of ${output.length} characters; the full output is in ${path.join(runsDir(), `${id}.out`)}]`;
 }
 const taskPath = (id) => path.join(tasksDir(), `${id}.json`);
+
+// A task's activity log: one JSON line per step, appended as it happens (so it survives a crashed
+// worker), with a start and an end marker. Removed with the task's other run files (src/retention.js).
+export const activityPath = (id) => path.join(runsDir(), `${id}.activity.jsonl`);
+function appendActivity(id, entry) {
+  try {
+    fs.mkdirSync(runsDir(), { recursive: true });
+    fs.appendFileSync(activityPath(id), `${JSON.stringify(entry)}\n`);
+  } catch {
+    // the log is a convenience: the task goes on without it
+  }
+}
+// A running task's progress lives in its own file (runs/<id>.progress.json), written without the queue
+// lock: nothing else writes it, so it can never overwrite a state the reaper set. When the task ends,
+// the last progress goes into the task record and the file is removed.
+export const progressPath = (id) => path.join(runsDir(), `${id}.progress.json`);
+function writeProgress(id, progress) {
+  try {
+    fs.mkdirSync(runsDir(), { recursive: true });
+    const tmp = `${progressPath(id)}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(progress));
+    fs.renameSync(tmp, progressPath(id)); // atomic: readers never see half a file
+  } catch {
+    // progress is a convenience: the task goes on without it
+  }
+}
+function removeProgress(id) {
+  try {
+    fs.rmSync(progressPath(id), { force: true });
+  } catch {
+    // left for retention to remove; never in the way of ending the task
+  }
+}
+// The progress to show for a task: the live file while it runs, else what its record kept.
+export function taskProgress(t) {
+  if (t?.state === 'running' && ID_RE.test(String(t.id))) {
+    try {
+      const p = JSON.parse(fs.readFileSync(progressPath(t.id), 'utf8'));
+      if (p && typeof p === 'object' && !Array.isArray(p)) return p;
+    } catch {
+      // no file yet, or a damaged one: fall back to the record
+    }
+  }
+  return t?.progress ?? null;
+}
+// The log from byte `from` on, oldest first, whole lines only; `next` is where the following read starts.
+// So a page that polls reads only what was appended since its last poll.
+export function readActivity(id, { from = 0 } = {}) {
+  if (!ID_RE.test(String(id))) return { items: [], next: 0 };
+  let fd;
+  try {
+    fd = fs.openSync(activityPath(id), 'r');
+  } catch {
+    return { items: [], next: 0 }; // no log (an older task, or one that never ran)
+  }
+  try {
+    const { size } = fs.fstatSync(fd);
+    const start = Math.min(from, size);
+    const buf = Buffer.alloc(size - start);
+    const read = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, start));
+    const end = read.lastIndexOf(0x0a) + 1; // a line still being written waits for the next read
+    return { items: parseActivityLog(read.subarray(0, end).toString('utf8')), next: start + end };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const progressCounts = (p) => `${counted(p?.steps ?? 0, 'step')} · ${counted(p?.filesEdited ?? 0, 'file')} edited · ${counted(p?.commands ?? 0, 'command')}`;
+const secondsSince = (iso, now = Date.now()) => {
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? Math.max(0, Math.round((now - ms) / 1000)) : 0;
+};
 
 // Only a well-formed record counts as a task: a damaged file (truncated, hand-edited, `null`) is
 // ignored rather than crashing the queue code that reads every task under the lock.
@@ -70,17 +146,35 @@ export function updateTask(id, patch) {
   return next;
 }
 
-export function listTasks() {
-  let names = [];
+const taskIds = () => {
   try {
-    names = fs.readdirSync(tasksDir()).filter((n) => n.endsWith('.json'));
+    return fs.readdirSync(tasksDir()).filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5));
   } catch {
     return [];
   }
-  return names
-    .map((n) => readTask(n.slice(0, -5)))
-    .filter(Boolean)
-    .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
+};
+const byCreation = (a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''));
+
+export function listTasks() {
+  return taskIds().map(readTask).filter(Boolean).sort(byCreation);
+}
+
+// The queued and running tasks, for the dashboard that asks every few seconds. A finished task never
+// runs again, so once one is seen finished its file is not read again (only its id is remembered).
+const finishedIds = new Set();
+export function listLiveTasks() {
+  const ids = taskIds();
+  const present = new Set(ids);
+  for (const id of finishedIds) if (!present.has(id)) finishedIds.delete(id);
+  const live = [];
+  for (const id of ids) {
+    if (finishedIds.has(id)) continue;
+    const t = readTask(id);
+    if (!t) continue;
+    if (TERMINAL.has(t.state)) finishedIds.add(id);
+    else live.push(t);
+  }
+  return live.sort(byCreation);
 }
 
 function pidAlive(pid) {
@@ -195,7 +289,10 @@ function reap(tasks, config) {
         promptPreview: t.prompt.slice(0, 160),
       });
     }
-    Object.assign(t, updateTask(t.id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error } }));
+    const progress = t.state === 'running' ? taskProgress(t) : null;
+    if (t.state === 'running') appendActivity(t.id, { s: secondsSince(t.startedAt, now), kind: 'end', what: `Stopped: ${error} · ${progressCounts(progress)}` });
+    Object.assign(t, updateTask(t.id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error }, ...(progress ? { progress } : {}) }));
+    removeProgress(t.id);
   }
   return tasks;
 }
@@ -245,8 +342,9 @@ function canStart(task, tasks, config) {
   return !tasks.some((t) => t.state === 'queued' && t.id !== task.id && t.createdAt < task.createdAt && runningFor(t.target) < perTarget);
 }
 
-export function queueStatus(config = loadConfig()) {
-  const tasks = listTasks().filter((t) => !TERMINAL.has(t.state));
+// `tasks`: the task list when the caller already has it.
+export function queueStatus(config = loadConfig(), tasks = listTasks()) {
+  tasks = tasks.filter((t) => !TERMINAL.has(t.state));
   const count = (state, target) => tasks.filter((t) => t.state === state && (!target || t.target === target)).length;
   return {
     running: count('running'),
@@ -592,7 +690,7 @@ export function spawnWorker(id) {
 // Wait for a slot, run the target, record usage and the result. Runs in a worker or in the CLI.
 // Whatever goes wrong after the task was picked up, it ends in a terminal state with a usage record.
 export async function executeTask(id, { echoStderr = false } = {}) {
-  const ctx = { recorded: false, startedAt: null };
+  const ctx = { recorded: false, startedAt: null, progress: null, stopProgress: null };
   try {
     return await runTask(id, { echoStderr }, ctx);
   } catch (err) {
@@ -607,7 +705,17 @@ export async function executeTask(id, { echoStderr = false } = {}) {
       }
     }
     if (TERMINAL.has(task.state)) return task;
-    return updateTask(id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error } });
+    // A run that broke off after its start marker still gets an end marker, its time and its last progress.
+    let ran = {};
+    if (ctx.progress) {
+      ctx.stopProgress?.();
+      const progress = ctx.progress.snapshot();
+      const wallMs = Date.now() - ctx.startedAt;
+      appendActivity(id, { s: Math.round(wallMs / 1000), kind: 'end', what: `Failed: ${cleanLabel(error).slice(0, 80)} · ${progressCounts(progress)}` });
+      removeProgress(id);
+      ran = { progress, wallMs };
+    }
+    return updateTask(id, { state: 'failed', finishedAt: new Date().toISOString(), result: { ok: false, error }, ...ran });
   }
 }
 
@@ -688,6 +796,35 @@ async function runTask(id, { echoStderr }, ctx) {
   ensureCanary(); // must exist before the target starts, so a nested call sees it denied
 
   ctx.startedAt = Date.now();
+  // What the target is doing, from its own event stream: kept in its progress file (at most once a
+  // second) and, from the CLI, printed as it happens.
+  // The full log goes to its own file; past MAX_LOG steps they are only counted (a looping target cannot fill the disk).
+  let logLines = 0;
+  const logStep = (entry) => {
+    if (logLines < MAX_LOG) appendActivity(id, entry);
+    else if (logLines === MAX_LOG) appendActivity(id, { s: entry.s, kind: 'note', what: `The log is full (${MAX_LOG} steps): later steps are counted, not logged` });
+    logLines++;
+  };
+  appendActivity(id, { s: 0, kind: 'start', what: `Started · ${TOOL_NAMES[task.target] ?? task.target}${task.model ? ` · ${task.model}` : ''}` });
+  const progress = createProgress({
+    target: task.target, base: task.worktree.path, timeoutSeconds: taskTimeoutSeconds(config), onLog: logStep,
+    onActivity: echoStderr ? (a) => process.stderr.write(`[nuncius] ${shortDuration((Date.now() - ctx.startedAt) / 1000)} ${a.what}\n`) : undefined,
+  });
+  // Saved a moment after an event, so a burst of them lands in one write, and then at most once a second.
+  let progressSaved = 0;
+  let progressTimer = null;
+  const saveProgress = () => {
+    if (progressTimer) return;
+    progressTimer = setTimeout(() => {
+      progressTimer = null;
+      progressSaved = Date.now();
+      writeProgress(id, progress.snapshot());
+    }, Math.max(PROGRESS_BATCH_MS, progressSaved + PROGRESS_SAVE_MS - Date.now()));
+    progressTimer.unref();
+  };
+  ctx.progress = progress;
+  ctx.stopProgress = () => clearTimeout(progressTimer);
+  updateTask(id, { progress: progress.snapshot() });
   let proxy = null;
   const runtimeDirs = [];
   let sealed = new Map();
@@ -756,12 +893,16 @@ async function runTask(id, { echoStderr }, ctx) {
         updateTask(id, { targetProcess: { pid, bin, dirs: [task.worktree.path, ...runtimeDirs] } });
       },
       echoStderr,
+      onLine: (line) => {
+        if (progress.feed(line)) saveProgress();
+      },
       wrap: sandboxWrapper({ worktree: task.worktree.path, callerRepo: task.worktree.root, target: task.target, proxyPort: proxy.port, runtimeDirs, config: config.sandbox, runCwd: task.worktree.runCwd, targetBin: bin, gitDir: commonDir,
         ...(account ? { account, accountEnv: env, secrets: login.secrets, claudeTemp } : {}) }),
     }).then(
       (r) => r,
       (err) => ({ ok: false, error: String(err), rawStdout: '', exitCode: 1, usage: null, limits: null }),
     );
+    clearTimeout(progressTimer); // the final write below carries the last progress
     // As a task account: stop everything it started (however it detached), then hand back what it
     // wrote (it may have made files unreadable to the user) before nuncius reads or commits any of it.
     if (account) {
@@ -827,16 +968,25 @@ async function runTask(id, { echoStderr }, ctx) {
       commitError = `target finished but committing its work failed: ${err.message}`;
     }
   }
-  return updateTask(id, {
+  const endState = commitError ? 'failed' : res.timedOut ? 'timeout' : res.ok ? 'done' : 'failed';
+  const ending = endState === 'done' ? 'Done' : endState === 'timeout' ? `Timed out after ${shortDuration(taskTimeoutSeconds(config))}` : `Failed: ${cleanLabel(commitError ?? error ?? 'unknown error').slice(0, 80)}`;
+  // A committed run's changed files are known exactly, however they were written: the tools report only
+  // their edit tools while they run, not a file written by a shell command.
+  const finalProgress = { ...progress.snapshot(), ...(worktree !== task.worktree ? { filesEdited: worktree.changed ? worktree.files.length : 0 } : {}) };
+  appendActivity(id, { s: Math.round(wallMs / 1000), kind: 'end', what: `${ending} · ${progressCounts(finalProgress)}` });
+  const finished = updateTask(id, {
     worktree,
     egress,
     evidence,
+    progress: finalProgress,
     ...(warnings.length ? { warnings } : {}),
-    state: commitError ? 'failed' : res.timedOut ? 'timeout' : res.ok ? 'done' : 'failed',
+    state: endState,
     finishedAt: new Date().toISOString(),
     wallMs,
     result: { ok: res.ok && !res.timedOut && !commitError, output: capOutput(res.output, id), error: commitError ?? error, exitCode: res.exitCode, usage: res.usage, limits: res.limits },
   });
+  removeProgress(id);
+  return finished;
 }
 
 // Stops waiting early when `signal` is aborted (the MCP client cancelled); the task itself runs on.
@@ -847,6 +997,14 @@ export async function waitForTask(id, seconds, { signal } = {}) {
     if (!task || TERMINAL.has(task.state) || Date.now() >= deadline || signal?.aborted) return task;
     await sleep(Math.min(500, Math.max(50, deadline - Date.now())));
   }
+}
+
+function runningNote(p) {
+  if (!p) return '';
+  const of = p.timeoutSeconds ? ` of at most ${shortDuration(p.timeoutSeconds)}` : '';
+  const last = p.lastActivity.secondsAgo == null ? '' : p.lastActivity.what || p.steps ? `, last activity ${shortDuration(p.lastActivity.secondsAgo)} ago` : ', no activity reported yet';
+  const quiet = p.quiet ? `. No activity for ${shortDuration(p.lastActivity.secondsAgo)}: it may be stuck, or thinking for a long time` : '';
+  return `: ${shortDuration(p.elapsedSeconds)}${of}${last}${quiet}`;
 }
 
 // What callers see: no raw output, prompt shortened, a hint when it is still going.
@@ -862,6 +1020,8 @@ export function publicTask(task) {
   // Hosts the target tried to reach but the proxy refused: useful when a task fails for lack of network.
   if (task.egress?.denied?.length) out.blockedHosts = task.egress.denied;
   if (task.result) out.result = result;
+  const progress = progressView(taskProgress(task), { state: task.state, startedAt: task.startedAt, finishedAt: task.finishedAt, wallMs: task.wallMs });
+  if (progress) out.progress = progress;
   if (task.warnings?.length) out.warnings = task.warnings;
   if (task.evidence) out.modelsReported = { models: task.evidence.models, source: task.evidence.source, files: task.evidence.files?.length ?? 0 };
   const wt = task.worktree;
@@ -881,6 +1041,7 @@ export function publicTask(task) {
     if ((task.state === 'failed' || task.state === 'timeout') && !wt.removed && !wt.changed)
       out.next = `The worktree is kept for inspection at ${wt.path}. \`nuncius cleanup\` later saves any changes in it on ${wt.branch} and removes the checkout.`;
   }
-  if (!TERMINAL.has(task.state)) out.next = `Still ${task.state}. Call wait_task with id "${task.id}" to keep waiting, or get_task to check without waiting.`;
+  // Times and counts only: the activity label is target-controlled and this field reads as instructions.
+  if (!TERMINAL.has(task.state)) out.next = `Still ${task.state}${runningNote(progress)}. Call wait_task with id "${task.id}" to keep waiting, or get_task to check without waiting.`;
   return out;
 }

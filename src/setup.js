@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, DEFAULT_CONFIG } from './config.js';
-import { targetStatus, findBin } from './targets.js';
+import { targetStatus, findBin, TOOL_NAMES as NAMES } from './targets.js';
 import { setSetting, unsetSetting, getSetting, parseFor, spec, valuesOf, formatValue } from './settings.js';
 import { statuslineInstalled, installStatusline } from './statusline.js';
 import { hookInstalled, installHook } from './hook-install.js';
@@ -17,7 +17,6 @@ import { underAgent } from './tasks.js';
 // output as functions, so it can be tested without a terminal.
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const NAMES = { codex: 'Codex', claude: 'Claude', cursor: 'Cursor' };
 const LOGIN = { codex: 'codex login', cursor: 'cursor-agent login', claude: 'claude (then /login)' };
 
 // How the tools should start nuncius's MCP server: `nuncius` when it is on PATH, else node + nuncius.js.

@@ -34,7 +34,7 @@ export function parseCodexJsonl(stdout) {
   return { threadId, usage, finalMessage, error, turns };
 }
 
-export async function runCodex({ bin, prompt, extraArgs, cwd, env, timeoutMs, echoStderr, wrap, onSpawn }) {
+export async function runCodex({ bin, prompt, extraArgs, cwd, env, timeoutMs, echoStderr, wrap, onSpawn, onLine }) {
   // Codex's own Seatbelt sandbox is not relied on inside the nuncius's (Claude Code's failed to start
   // there; Codex's is unverified), so the nuncius switches it off and its outer sandbox + egress proxy confine Codex and every
   // command it runs (files and network). Only the nuncius sets this; callers cannot (src/args.js).
@@ -42,7 +42,7 @@ export async function runCodex({ bin, prompt, extraArgs, cwd, env, timeoutMs, ec
   // `--` ends option parsing, so a prompt starting with '-' can never become a flag.
   const args = ['exec', '--json', ...sandbox, ...extraArgs, '--', prompt];
   const cmd = wrap ? wrap(bin, args) : { bin, args };
-  const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn });
+  const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn, onLine });
   const parsed = parseCodexJsonl(res.stdout);
   // Rate limits are not taken from the task: its rollout files are written inside the sandbox, so a
   // target could forge them. Nuncius asks Codex itself afterwards (refreshCodexLimits).

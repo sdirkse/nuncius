@@ -141,6 +141,47 @@ test('run_task hands back an id when slow, wait_task collects the result', async
   assert.equal(done.result.output, 'Cursor did: refactor SLEEP:1500');
 });
 
+test('a running task reports its progress; a finished one keeps it', async () => {
+  const { call } = await startServer();
+  const started = (await call('run_task', { target: 'cursor', prompt: 'refactor WRITE:a.txt SLEEP:2500', cwd: repo, wait_seconds: 0.2 })).structuredContent;
+  assert.equal(started.state, 'running');
+  // Progress is saved at most every few seconds; the first events arrive straight away.
+  let peek;
+  for (let i = 0; i < 40; i++) {
+    peek = (await call('get_task', { id: started.id })).structuredContent;
+    if (peek.progress?.commands) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(peek.state, 'running');
+  assert.equal(peek.progress.timeoutSeconds, 1800);
+  assert.equal(peek.progress.commands, 1);
+  assert.equal(peek.progress.filesEdited, 1);
+  assert.equal(peek.progress.lastActivity.what, 'edit a.txt');
+  assert.equal(peek.progress.quiet, false);
+  assert.match(peek.next, /^Still running: \d+ s of at most 30 min, last activity \d+ s ago\. Call wait_task/);
+  assert.doesNotMatch(peek.next, /a\.txt/, 'target-controlled labels stay out of the hint');
+  const done = (await call('wait_task', { id: started.id, timeout_seconds: 10 })).structuredContent;
+  assert.equal(done.state, 'done');
+  assert.equal(done.progress.filesEdited, 1);
+  assert.ok(done.progress.elapsedSeconds >= 2);
+  // The full activity log: a start marker, every step, and an end marker with the counts.
+  const log = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${started.id}.activity.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(log.map((e) => e.kind), ['start', 'command', 'edit', 'end']);
+  assert.equal(log[0].what, 'Started · Cursor');
+  assert.equal(log.at(-1).what, 'Done · 2 steps · 1 file edited · 1 command');
+  assert.equal(fs.existsSync(path.join(env.NUNCIUS_HOME, 'runs', `${started.id}.progress.json`)), false, 'the live progress file goes when the task ends');
+});
+
+test('a finished task counts the files its commit changed, also those written by a shell command', async () => {
+  const { call } = await startServer();
+  const t = (await call('run_task', { target: 'cursor', prompt: 'edit WRITE:a.txt SHELLWRITE:b.txt', cwd: repo, wait_seconds: 10 })).structuredContent;
+  assert.equal(t.state, 'done');
+  assert.deepEqual(t.worktree.files, ['a.txt', 'b.txt']);
+  assert.equal(t.progress.filesEdited, 2, 'not only the one the tool reported');
+  const log = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${t.id}.activity.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(log.at(-1).what, 'Done · 2 steps · 2 files edited · 1 command');
+});
+
 test('queue respects the per-target limit and runs FIFO', async () => {
   writeConfig({ concurrency: { perTarget: 1, total: 4 } });
   const { call } = await startServer();
@@ -162,6 +203,13 @@ test('tasks are killed after the timeout', async () => {
   const t = (await call('run_task', { target: 'cursor', prompt: 'forever SLEEP:5000', cwd: repo, wait_seconds: 10 })).structuredContent;
   assert.equal(t.state, 'timeout');
   assert.match(t.result.error, /timed out/);
+  // What the target did before it was stopped is kept: in the progress and in its raw output.
+  assert.equal(t.progress.commands, 1);
+  const out = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${t.id}.out`), 'utf8');
+  assert.match(out, /shellToolCall/);
+  const log = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${t.id}.activity.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(log.at(-1).kind, 'end');
+  assert.match(log.at(-1).what, /^Timed out after \d+ s · 1 step · 0 files edited · 1 command$/);
 });
 
 test('nested nuncius calls are refused (recursion guard)', async () => {

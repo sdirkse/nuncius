@@ -6,13 +6,16 @@ export const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 // After the child exits, how long to wait for its pipes to close. A process that left the group
 // (setsid) can hold them open for ever; the run must still end, on time and with a usage record.
 const PIPE_GRACE_MS = 2000;
+// A stdout line longer than this is not handed to onLine (it is still kept in the output).
+const MAX_LINE_CHARS = 8 * 1024 * 1024;
 
 // Run a CLI and capture its output. stderr is echoed when `echoStderr` is set (the interactive CLI),
 // so a person still sees progress. After `timeoutMs` the child gets SIGTERM, then SIGKILL 5s later.
 // The child leads its own process group, so a timeout, its exit, or nuncius being stopped also ends
 // every process it started in the background (except ones that left the group on purpose).
 // `onSpawn(pid)` is told the child's pid (= its process group), so a supervisor can end it later.
-export function run(bin, args, { cwd, env = process.env, timeoutMs = 0, echoStderr = false, onSpawn, input }) {
+// `onLine(line)` hears each complete stdout line as it arrives (progress of a running task).
+export function run(bin, args, { cwd, env = process.env, timeoutMs = 0, echoStderr = false, onSpawn, onLine, input }) {
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
@@ -65,6 +68,7 @@ export function run(bin, args, { cwd, env = process.env, timeoutMs = 0, echoStde
     const done = (result) => {
       if (settled) return;
       settled = true;
+      if (onLine && partial && !skipping) tell(partial); // the last line, without a newline after it
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(graceTimer);
@@ -82,7 +86,37 @@ export function run(bin, args, { cwd, env = process.env, timeoutMs = 0, echoStde
     // Decode as a stream: a multibyte character split across two chunks stays intact.
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (d) => (stdout = keep(stdout, d)));
+    // Lines are cut from the stream separately from what is kept. Only the new chunk is searched for a
+    // newline, and a line longer than the cap is dropped whole: skipped up to its newline, never handed on in parts.
+    let partial = '';
+    let skipping = false;
+    const tell = (line) => {
+      try {
+        onLine(line);
+      } catch {
+        // a listener must never break the run
+      }
+    };
+    const lines = (d) => {
+      let from = 0;
+      let nl;
+      while ((nl = d.indexOf('\n', from)) >= 0) {
+        if (!skipping) tell(partial + d.slice(from, nl));
+        partial = '';
+        skipping = false;
+        from = nl + 1;
+      }
+      if (skipping) return;
+      partial += d.slice(from);
+      if (partial.length > MAX_LINE_CHARS) {
+        partial = '';
+        skipping = true;
+      }
+    };
+    child.stdout.on('data', (d) => {
+      stdout = keep(stdout, d);
+      if (onLine) lines(d);
+    });
     child.stderr.on('data', (d) => {
       stderr = keep(stderr, d);
       if (echoStderr) process.stderr.write(d);

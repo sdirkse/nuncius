@@ -1,8 +1,7 @@
 import { localDay } from './log.js';
 import { totalsFor, latestCodexLimits } from './summary.js';
 import { readClaudeLimits } from './claude-limits.js';
-
-const NAMES = { codex: 'Codex', claude: 'Claude', cursor: 'Cursor' };
+import { TOOL_NAMES as NAMES } from './targets.js';
 
 // A cap is a number; null, a missing key or anything that is not a number means "no cap".
 const capOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);

@@ -344,6 +344,50 @@ test('the dashboard survives a malformed request, bad records, and uppercase Hos
     // Without the token (another account on this Mac reaching 127.0.0.1) the data API refuses.
     assert.equal((await get('/api/summary', undefined, null)).status, 401);
     assert.equal((await get('/api/tasks?page=1', undefined, null)).status, 401);
+    assert.equal((await get('/api/live', undefined, null)).status, 401, 'the live view needs the token too');
+    const live = await get('/api/live');
+    assert.equal(live.status, 200, 'a damaged task file does not break /api/live');
+    assert.deepEqual(Object.keys(JSON.parse(live.body)).sort(), ['activeTasks', 'generatedAt', 'queue']);
+    // A task's activity log comes back cleaned, oldest first, and from a given line on.
+    const logged = '11111111-1111-4111-8111-111111111111';
+    fs.writeFileSync(path.join(tasksDir, `${logged}.json`), JSON.stringify({ id: logged, state: 'done', target: 'cursor', prompt: 'p', startedAt: '2026-10-28T08:00:00.000Z', finishedAt: '2026-10-28T08:01:00.000Z', wallMs: 60000,
+      progress: { startedAt: '2026-10-28T08:00:00.000Z', lastActivityAt: '2026-10-28T08:00:50.000Z', lastActivity: 'edit a.js', steps: 2, filesEdited: 1, commands: 1, logged: 2 } }));
+    fs.mkdirSync(path.join(env.NUNCIUS_HOME, 'runs'), { recursive: true });
+    fs.writeFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${logged}.activity.jsonl`), [{ s: 0, kind: 'start', what: 'Started' }, { s: 5, kind: 'command', what: 'Shell: ls' }, { s: 50, kind: 'edit', what: 'edit a.js\u202e' }, { s: 60, kind: 'end', what: 'Done' }].map((e) => JSON.stringify(e)).join('\n') + '\n');
+    const detail = JSON.parse((await get(`/api/task?id=${logged}`)).body);
+    assert.deepEqual(detail.activity.items.map((e) => e.what), ['Started', 'Shell: ls', 'edit a.js', 'Done']);
+    const logText = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${logged}.activity.jsonl`), 'utf8');
+    assert.equal(detail.activity.next, Buffer.byteLength(logText), 'next: the end of the last whole line');
+    assert.equal(detail.activity.filesEdited, 1);
+    assert.equal(detail.activity.elapsedSeconds, 60);
+    // From a byte offset only the lines after it are read; a line still being written waits for the next read.
+    const twoLines = Buffer.byteLength(logText.split('\n').slice(0, 2).join('\n') + '\n');
+    const more = JSON.parse((await get(`/api/task?id=${logged}&from=${twoLines}`)).body);
+    assert.deepEqual([more.activity.from, more.activity.items.map((e) => e.kind)], [twoLines, ['edit', 'end']]);
+    assert.equal(JSON.parse((await get(`/api/task?id=${logged}&from=-3`)).body).activity.from, 0, 'odd offsets fall back to the start');
+    assert.deepEqual(JSON.parse((await get(`/api/task?id=${logged}&from=999999`)).body).activity.items, [], 'past the end: nothing new');
+    fs.appendFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${logged}.activity.jsonl`), '{"s":61,"kind":"note","wh');
+    const partial = JSON.parse((await get(`/api/task?id=${logged}&from=${detail.activity.next}`)).body).activity;
+    assert.deepEqual([partial.items, partial.next], [[], detail.activity.next]);
+    fs.appendFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${logged}.activity.jsonl`), 'at":"late"}\n');
+    assert.deepEqual(JSON.parse((await get(`/api/task?id=${logged}&from=${detail.activity.next}`)).body).activity.items.map((e) => e.what), ['late']);
+    // The task window's 2-second poll: only the state and the new lines, behind the token too.
+    assert.equal((await get(`/api/task/activity?id=${logged}`, undefined, null)).status, 401);
+    const slim = JSON.parse((await get(`/api/task/activity?id=${logged}&from=${twoLines}`)).body);
+    assert.deepEqual(Object.keys(slim).sort(), ['activity', 'id', 'state']);
+    assert.deepEqual(slim.activity.items.map((e) => e.kind), ['edit', 'end', 'note']);
+    assert.equal((await get('/api/task/activity?id=../../etc/passwd')).status, 404);
+    // A running task's progress comes from its own file, which the worker writes without the queue lock.
+    const running = '22222222-2222-4222-8222-222222222222';
+    fs.writeFileSync(path.join(tasksDir, `${running}.json`), JSON.stringify({ id: running, state: 'running', target: 'codex', prompt: 'p', workerPid: process.pid, createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), progress: { steps: 0 } }));
+    fs.writeFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${running}.progress.json`), JSON.stringify({ startedAt: new Date().toISOString(), lastActivityAt: new Date().toISOString(), lastActivity: 'Shell: npm test', steps: 3, filesEdited: 1, commands: 2 }));
+    const now = JSON.parse((await get('/api/live')).body).activeTasks.find((t) => t.id === running);
+    assert.equal(now.progress.steps, 3);
+    assert.equal(now.progress.lastActivity.what, 'Shell: npm test');
+    // Once it finishes it leaves the live view, and stays gone (a finished task is not read again).
+    fs.writeFileSync(path.join(tasksDir, `${running}.json`), JSON.stringify({ id: running, state: 'done', target: 'codex', prompt: 'p', createdAt: new Date().toISOString() }));
+    for (let i = 0; i < 2; i++) assert.equal(JSON.parse((await get('/api/live')).body).activeTasks.some((t) => t.id === running), false);
+    fs.rmSync(path.join(tasksDir, `${running}.json`));
     const tasks = await get('/api/tasks?page=9&size=25&q=%00%ff');
     assert.equal(tasks.status, 200, 'odd paging and search input is answered, not a crash');
     assert.deepEqual(Object.keys(JSON.parse(tasks.body)).sort(), ['items', 'page', 'pages', 'size', 'total']);

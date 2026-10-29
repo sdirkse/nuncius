@@ -273,6 +273,11 @@ test('a running task far past its timeout stops holding its slot', () => {
     const after = tasks().find((t) => t.id === hung.id);
     assert.equal(after.state, 'failed');
     assert.match(after.result.error, /did not finish within the task timeout/);
+    // Its activity log ends with what happened to it, about ten minutes in.
+    const log = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'runs', `${hung.id}.activity.jsonl`), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(log.at(-1).kind, 'end');
+    assert.match(log.at(-1).what, /^Stopped: worker did not finish within the task timeout · 0 steps/);
+    assert.ok(log.at(-1).s >= 599, String(log.at(-1).s));
   } finally {
     worker.kill();
   }
@@ -296,6 +301,9 @@ test('an error after the target ran still ends the task as failed, with one usag
   const t = tasks().at(-1);
   assert.equal(t.state, 'failed');
   assert.equal(usage().filter((u) => u.id === t.id).length, 1);
+  // The run broke off after it started: the record still gets its time and its last progress.
+  assert.ok(t.wallMs >= 0);
+  assert.equal(t.progress.commands, 0);
 });
 
 test('a scratch file the target made immutable does not break the task', () => {

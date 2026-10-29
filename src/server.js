@@ -6,11 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { readUsage } from './log.js';
 import { summarise, latestCodexLimits, taskPage } from './summary.js';
 import { loadConfig, configPath } from './config.js';
-import { listTasks, readTask, queueStatus, TERMINAL, freshCodexLimits } from './tasks.js';
+import { listLiveTasks, readTask, readActivity, taskProgress, queueStatus, freshCodexLimits } from './tasks.js';
 import { openWorktrees, autoCleanup } from './cleanup.js';
 import { claudeLimitsHint, readBridgeSeen } from './claude-limits.js';
 import { targetStatus } from './targets.js';
 import { statuslineInstalled } from './statusline.js';
+import { progressView, QUIET_SECONDS } from './progress.js';
 
 const PAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dashboard', 'index.html');
 
@@ -27,18 +28,32 @@ export function buildSummary({ days = 30, project = '' } = {}) {
   s.budgets = config.budgets;
   // Which tools this user has, so the dashboard only shows those (and any with usage in the period).
   s.targets = targetStatus(config).map(({ name, enabled, installed, available, reason }) => ({ name, enabled, installed, available, reason }));
-  s.queue = queueStatus(config);
   // Ask Codex for its current windows in the background (cached a minute): the next poll shows them.
   if (s.targets.find((t) => t.name === 'codex')?.available) freshCodexLimits(config).catch(() => {});
-  // Live tasks are shown for every project: the queue is shared.
-  s.activeTasks = listTasks()
-    .filter((t) => !TERMINAL.has(t.state))
-    .map((t) => ({ id: t.id, state: t.state, target: t.target, model: t.model, project: t.project, agent: t.agent, createdAt: t.createdAt, startedAt: t.startedAt ?? null, network: !!t.network, promptPreview: String(t.prompt ?? '').slice(0, 160) }));
+  const { queue, activeTasks } = buildLive(config);
+  s.queue = queue;
+  s.activeTasks = activeTasks;
   s.worktrees = openWorktrees()
     .filter((w) => !project || w.project === project)
     .map((w) => ({ ...w, files: w.files?.length ?? 0 }))
     .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''))); // newest first
   return s;
+}
+
+// The Now section on its own: cheap (task files only), so the page asks for it every few seconds.
+// Live tasks are shown for every project: the queue is shared.
+export function buildLive(config = loadConfig()) {
+  const live = listLiveTasks();
+  const activeTasks = live
+    .map((t) => ({ id: t.id, state: t.state, target: t.target, model: t.model, project: t.project, agent: t.agent, createdAt: t.createdAt, startedAt: t.startedAt ?? null, network: !!t.network, promptPreview: String(t.prompt ?? '').slice(0, 160),
+      // The page counts the times on itself between polls, so it gets the moments, not just the view.
+      progress: liveProgress(t) }));
+  return { queue: queueStatus(config, live), activeTasks, generatedAt: new Date().toISOString() };
+}
+
+function liveProgress(t) {
+  const p = t.state === 'running' ? taskProgress(t) : null;
+  return p ? { ...progressView(p, { state: t.state, startedAt: t.startedAt }), lastActivityAt: p.lastActivityAt ?? null, quietSeconds: QUIET_SECONDS } : null;
 }
 
 // One page of the task list, with the dashboard's filters (see taskPage).
@@ -50,7 +65,8 @@ export function buildTaskPage({ days = 30, project = '', tool = '', outcome = ''
 
 // One task in full, for the dashboard's detail view: the whole prompt and the target's answer.
 // Both are shown as text (the answer is target output); the id must be a task id (readTask checks).
-export function taskDetail(id) {
+// `from`: where in the activity log the page is (the `next` it was given); only later lines are sent.
+export function taskDetail(id, { from = 0 } = {}) {
   const t = readTask(id);
   if (!t) return null;
   const wt = t.worktree;
@@ -60,7 +76,20 @@ export function taskDetail(id) {
     prompt: t.prompt, output: t.result?.output ?? '', error: t.result?.error ?? null, usage: t.result?.usage ?? null,
     modelsReported: t.evidence?.models ?? [], blockedHosts: t.egress?.denied ?? [], warnings: t.warnings ?? [],
     worktree: wt ? { branch: wt.branch, changed: wt.changed ?? null, removed: !!wt.removed, files: wt.files ?? [], sensitiveFiles: wt.sensitiveFiles ?? [], review: wt.review ?? null, apply: wt.apply ?? null } : null,
+    // What the target did, oldest first, from `from` in its log (tasks from before the log have none).
+    activity: activityOf(t, from),
   };
+}
+
+// Only what the task window needs every 2 s while a task runs: its state and the new log lines.
+export function taskActivity(id, { from = 0 } = {}) {
+  const t = readTask(id);
+  return t ? { id: t.id, state: t.state, activity: activityOf(t, from) } : null;
+}
+
+function activityOf(t, from) {
+  const p = taskProgress(t);
+  return p ? { ...readActivity(t.id, { from }), from, ...progressView(p, { state: t.state, startedAt: t.startedAt, finishedAt: t.finishedAt, wallMs: t.wallMs }) } : null;
 }
 
 // Only answer requests addressed to loopback by name, so a malicious site cannot read the
@@ -105,6 +134,9 @@ export function createServer(port, token) {
         const body = JSON.stringify(buildSummary({ days, project: url.searchParams.get('project') || '' }));
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(body);
+      } else if (url.pathname === '/api/live') {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(buildLive()));
       } else if (url.pathname === '/api/tasks') {
         const p = url.searchParams;
         const body = JSON.stringify(buildTaskPage({
@@ -114,8 +146,10 @@ export function createServer(port, token) {
         }));
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(body);
-      } else if (url.pathname === '/api/task') {
-        const detail = taskDetail(url.searchParams.get('id'));
+      } else if (url.pathname === '/api/task' || url.pathname === '/api/task/activity') {
+        const from = Number(url.searchParams.get('from'));
+        const read = url.pathname === '/api/task' ? taskDetail : taskActivity;
+        const detail = read(url.searchParams.get('id'), { from: Number.isSafeInteger(from) && from > 0 ? from : 0 });
         res.writeHead(detail ? 200 : 404, { 'content-type': 'application/json', 'cache-control': 'no-store' });
         res.end(JSON.stringify(detail ?? { error: 'no such task' }));
       } else if (url.pathname === '/') {

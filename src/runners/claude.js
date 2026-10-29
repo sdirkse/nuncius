@@ -65,11 +65,11 @@ export function claudeArgs({ extraArgs = [] }) {
   ];
 }
 
-export async function runClaude({ bin, prompt, extraArgs, cwd, env, timeoutMs, echoStderr, wrap, onSpawn }) {
+export async function runClaude({ bin, prompt, extraArgs, cwd, env, timeoutMs, echoStderr, wrap, onSpawn, onLine }) {
   // `--` ends option parsing, so a prompt starting with '-' can never become a flag.
   const args = [...claudeArgs({ extraArgs }), '--', prompt];
   const cmd = wrap ? wrap(bin, args) : { bin, args };
-  const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn });
+  const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn, onLine });
   const obj = parseClaudeJson(res.stdout);
   const ok = res.code === 0 && !!obj && !obj.is_error;
   return {
