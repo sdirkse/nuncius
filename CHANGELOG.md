@@ -4,6 +4,8 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-29
+
 ### Changed
 
 - **Releases are built by GitHub Actions** when a version bump is merged, through npm's trusted publishing, and go live on npm only after a maintainer approves them with two-factor authentication (npm's staged publishing).
@@ -41,6 +43,7 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 First public version: an MCP server and CLI that hand coding tasks to Codex, Cursor and Claude on your own subscriptions, each task sandboxed in its own git worktree, with usage logging, budgets and a dashboard.
 
-[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/sdirkse/nuncius/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/sdirkse/nuncius/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/sdirkse/nuncius/releases/tag/v0.1.0
