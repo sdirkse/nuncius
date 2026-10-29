@@ -1,7 +1,8 @@
-# Publishes a release when a merge to main carries a version that is not on npm yet: the tests,
-# `npm publish` (npm trusted publishing, so no token is stored here), then tag vX.Y.Z and a GitHub
-# release with that version's section of CHANGELOG.md. A merge without a version bump publishes nothing.
-# Every step skips what is already done, so re-running a failed run picks up where it stopped.
+# Releases a merge to main that carries a version without a GitHub release yet: the tests, then
+# `npm stage publish` (npm trusted publishing, so no token is stored here), then tag vX.Y.Z and a GitHub
+# release with that version's section of CHANGELOG.md. A merge without a version bump does nothing.
+# The staged version goes live on npm only when a maintainer approves it on npmjs.com (Staged Packages,
+# with 2FA): this workflow cannot put a version live on its own.
 # npm's trusted publisher for this package names this file: keep the name release.yml.
 name: Release
 
@@ -34,8 +35,10 @@ jobs:
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if npm view "$name@$version" version >/dev/null 2>&1 && gh release view "v$version" >/dev/null 2>&1; then
-            echo "$name $version is on npm and released: nothing to do."
+          # The GitHub release is made last, so it marks a version as done. (A staged version is not
+          # visible on npm until it is approved, so npm cannot tell.)
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "$name $version is released: nothing to do."
             echo "release=false" >> "$GITHUB_OUTPUT"
           else
             echo "release=true" >> "$GITHUB_OUTPUT"
@@ -59,6 +62,8 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      # npm stage publish needs npm 11.15 or later.
+      - run: npm install -g npm@11.21.1
       - name: Release notes from CHANGELOG.md
         run: |
           awk -v h="## [$VERSION]" 'index($0, h) == 1 { f = 1; next } /^## \[/ { f = 0 } f' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
@@ -67,13 +72,14 @@ jobs:
             exit 1
           fi
       - run: npm test
-      - name: Publish to npm
+      - name: Stage on npm
         run: |
           name=$(node -p "require('./package.json').name")
           if npm view "$name@$VERSION" version >/dev/null 2>&1; then
             echo "$name $VERSION is already on npm."
           else
-            npm publish
+            npm stage publish
+            echo "::notice::$name $VERSION is staged: approve it on npmjs.com (the package's Staged Packages tab) to publish it."
           fi
       - name: Tag and GitHub release
         env:

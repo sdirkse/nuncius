@@ -6,7 +6,7 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ### Changed
 
-- **Releases are published from GitHub Actions** when a version bump is merged, through npm's trusted publishing, so each npm version shows the commit and workflow it was built from (provenance).
+- **Releases are built by GitHub Actions** when a version bump is merged, through npm's trusted publishing, and go live on npm only after a maintainer approves them with two-factor authentication (npm's staged publishing).
 
 ## [0.2.0] - 2026-10-29
 
