@@ -1,6 +1,6 @@
 {
   "name": "nuncius",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Let AI coding agents hand work to each other across your own subscriptions, sandboxed and budgeted",
   "license": "Apache-2.0",
   "author": "Stefan Dirkse",

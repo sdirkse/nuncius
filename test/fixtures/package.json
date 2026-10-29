@@ -1,0 +1,4 @@
+{
+  "description": "The fake CLIs run inside the sandbox, which can read their own folder but not the repository above it when it lies in the home folder. Node looks for the nearest package.json to learn the module type, and Node 24 fails when it cannot read one: this file answers it here.",
+  "type": "module"
+}

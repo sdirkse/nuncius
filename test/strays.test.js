@@ -21,7 +21,9 @@ test('only processes started since the task, in its folders, count; never a sibl
   fs.mkdirSync(dir);
   fs.mkdirSync(sibling);
   const old = spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore', cwd: dir });
-  await new Promise((r) => setTimeout(r, 2500));
+  // findStrays counts a process whose whole-second age is at most ceil(time since the task) + 1, so
+  // an older process can look up to 2 s younger than it is: start it more than 3 s before the task.
+  await new Promise((r) => setTimeout(r, 3500));
   const since = Date.now();
   const fresh = spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore', cwd: dir });
   const next = spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore', cwd: sibling });

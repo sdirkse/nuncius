@@ -400,6 +400,18 @@ npm test
 
 The tests use fake `codex`, `cursor-agent` and `claude` binaries (`test/fixtures/`), so the real CLIs are not needed, but they do run the real sandbox, so they need macOS. Requires Node 20 or later. There are no dependencies. One test (`--force` from a terminal) only runs outside an agent: run `npm test` from a plain terminal to include it.
 
+GitHub runs the tests on every pull request ([test.yml](.github/workflows/test.yml)).
+
+### Releasing
+
+A release is a pull request that bumps the version and moves the changelog's `[Unreleased]` notes under the new version:
+
+```bash
+npm version minor --no-git-tag-version   # or patch / major
+```
+
+Then in `CHANGELOG.md`, rename `## [Unreleased]` to `## [x.y.z] - <date>`, add an empty `## [Unreleased]` above it, and update the links at the bottom. Once the pull request is merged, [release.yml](.github/workflows/release.yml) sees a version that is not on npm yet: it runs the tests, submits the package to npm as a staged version (through npm's trusted publishing, with no token stored in GitHub), and creates tag `vx.y.z` and a GitHub release with that version's changelog section. A merge without a new version does nothing. The version goes live on npm only when a maintainer approves it: on npmjs.com, open the package's *Staged Packages* tab, click *Approve* and confirm with two-factor authentication. The workflow cannot put a version live on its own. If a step fails, fix the cause and re-run the workflow: it skips the steps that are already done.
+
 ## Limitations
 
 Know these before you rely on Nuncius (the full list of residual risks is in the [threat model](docs/THREAT_MODEL.md#known-residual-risks)):
