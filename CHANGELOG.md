@@ -4,6 +4,10 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Releases are published from GitHub Actions** when a version bump is merged, through npm's trusted publishing, so each npm version shows the commit and workflow it was built from (provenance).
+
 ## [0.2.0] - 2026-10-29
 
 **Task progress.** Long tasks (Cursor runs of 15 to 30 minutes) looked the same as stuck ones: callers only got "Still running", the dashboard showed a ticking timer and nothing else, and a Cursor run that timed out left an empty output file. You can now see what a running task is doing, while it runs and afterwards.

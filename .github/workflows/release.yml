@@ -1,0 +1,86 @@
+# Publishes a release when a merge to main carries a version that is not on npm yet: the tests,
+# `npm publish` (npm trusted publishing, so no token is stored here), then tag vX.Y.Z and a GitHub
+# release with that version's section of CHANGELOG.md. A merge without a version bump publishes nothing.
+# Every step skips what is already done, so re-running a failed run picks up where it stopped.
+# npm's trusted publisher for this package names this file: keep the name release.yml.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if npm view "$name@$version" version >/dev/null 2>&1 && gh release view "v$version" >/dev/null 2>&1; then
+            echo "$name $version is on npm and released: nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    # The tests need macOS: they run the real sandbox (sandbox-exec).
+    runs-on: macos-latest
+    permissions:
+      contents: write # the tag and the GitHub release
+      id-token: write # npm trusted publishing
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v h="## [$VERSION]" 'index($0, h) == 1 { f = 1; next } /^## \[/ { f = 0 } f' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error::CHANGELOG.md has no section '## [$VERSION]'"
+            exit 1
+          fi
+      - run: npm test
+      - name: Publish to npm
+        run: |
+          name=$(node -p "require('./package.json').name")
+          if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+            echo "$name $VERSION is already on npm."
+          else
+            npm publish
+          fi
+      - name: Tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists."
+          else
+            gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
