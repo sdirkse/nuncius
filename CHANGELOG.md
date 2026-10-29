@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased: task progress
+All notable changes to nuncius are listed here, newest first. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version numbers follow [Semantic Versioning](https://semver.org/).
 
-Long tasks (Cursor runs of 15 to 30 minutes) looked the same as stuck ones: callers only got "Still running", the dashboard showed a ticking timer and nothing else, and a Cursor run that timed out left an empty output file. You can now see what a running task is doing, while it runs and afterwards.
+## [Unreleased]
+
+## [0.2.0] - 2026-10-29
+
+**Task progress.** Long tasks (Cursor runs of 15 to 30 minutes) looked the same as stuck ones: callers only got "Still running", the dashboard showed a ticking timer and nothing else, and a Cursor run that timed out left an empty output file. You can now see what a running task is doing, while it runs and afterwards.
 
 ### Added
 
@@ -27,17 +31,12 @@ Long tasks (Cursor runs of 15 to 30 minutes) looked the same as stuck ones: call
 
 ### Fixed
 
-These came up while building the feature, from testing on the dashboard and from a code and security review of the branch.
-
-- A run that broke off with a nuncius error after it had started got no end marker in its log, no run time and no final progress.
-- A failed Cursor run that printed an error object but no result reported only "exit code 1" instead of its reason.
-- Reading a tool's output: a line over 8 MB was cut off, but the rest of it was then handed on as if it were a line of its own; a last line without a newline after it was never read; and each new piece of output searched the whole unfinished line again, which was slow for long lines.
-- Activity labels could still carry invisible characters (zero-width spaces, text direction marks), so a command could look different from what ran. These are now removed, like other control characters.
-- Saving progress took the shared queue lock every second for each running task, competing with the queue and the reaper.
-- The 2-second live refresh read and parsed every stored task file. It now reads only queued and running tasks: a finished task never runs again, so it is remembered by id.
-- The task window fetched the whole task (prompt and answer included) every 2 seconds, and the server reread the whole activity log each time. It now asks `/api/task/activity` for what was added since the last poll, by position in the file; a line still being written waits for the next poll.
-- The activity summary showed whole seconds with a fake decimal ("40.0 s") and could differ from the Duration above it. Both now show the exact run time.
-- The final count of edited files missed files a tool wrote with a shell command (Claude often does, e.g. `cat >> calc.py <<EOF`): a run that changed 4 files ended with "0 files edited". When a task is done, the count now comes from the files its commit changed.
-- "Read finished" and "Shell finished: …" replaced the label of the step they ended, and steps were counted twice.
 - Pasting a new dashboard link (with a new token, after a restart) into a tab that was already open kept the old token, and every request failed with 401. The page now picks up the new token.
-- The tool names (Codex, Cursor, Claude) were defined in four places; there is now one.
+
+## [0.1.0] - 2026-10-26
+
+First public version: an MCP server and CLI that hand coding tasks to Codex, Cursor and Claude on your own subscriptions, each task sandboxed in its own git worktree, with usage logging, budgets and a dashboard.
+
+[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/sdirkse/nuncius/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/sdirkse/nuncius/releases/tag/v0.1.0

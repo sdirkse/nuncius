@@ -1,6 +1,6 @@
 {
   "name": "nuncius",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Let AI coding agents hand work to each other across your own subscriptions, sandboxed and budgeted",
   "license": "Apache-2.0",
   "author": "Stefan Dirkse",
@@ -10,7 +10,6 @@
   },
   "homepage": "https://github.com/sdirkse/nuncius#readme",
   "bugs": "https://github.com/sdirkse/nuncius/issues",
-  "private": true,
   "type": "module",
   "os": [
     "darwin"
@@ -18,6 +17,16 @@
   "bin": {
     "nuncius": "bin/nuncius.js"
   },
+  "files": [
+    "bin",
+    "src",
+    "dashboard",
+    "hooks",
+    "skills",
+    "scripts",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
   "scripts": {
     "test": "node --test test/*.test.js",
     "dashboard": "node bin/nuncius.js dashboard"

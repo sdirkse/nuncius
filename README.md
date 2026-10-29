@@ -25,10 +25,9 @@ The command, the package, the MCP server and the data folder are all called `nun
 | Claude | `claude` | run `claude` and `/login` |
 
 ```bash
-git clone https://github.com/sdirkse/nuncius.git && cd nuncius
-npm link        # puts `nuncius` on PATH
-nuncius setup   # a few questions, in your own terminal
-nuncius doctor  # proves the sandbox works on this machine
+npm install -g nuncius  # puts `nuncius` on PATH
+nuncius setup           # a few questions, in your own terminal
+nuncius doctor          # proves the sandbox works on this machine
 ```
 
 `nuncius setup` finds which of the three tools you have and asks:
@@ -108,7 +107,7 @@ Terms are defined in [CONTEXT.md](CONTEXT.md), and the decisions are recorded in
 ## Use from Claude Code or Cursor (MCP)
 
 ```bash
-npm link                                        # puts `nuncius` on PATH
+npm install -g nuncius                          # puts `nuncius` on PATH
 claude mcp add --scope user nuncius -- nuncius mcp
 ```
 
@@ -174,6 +173,7 @@ Every prompt gets a short preamble that tells the target it is in a worktree, mu
 A second wall next to the sandbox: Codex and Claude tasks run as one of four hidden, powerless macOS accounts instead of as you ([ADR 12](docs/adr/0012-separate-task-accounts.md)). A task account cannot read your private files (SSH keys, the Codex login, `Documents`, `Desktop`, `Downloads`, `Library`, Nuncius's data), write to your terminals or signal your processes; at the end, everything it started is stopped, however it detached; and a firewall rule keeps it to Nuncius's proxy. Your world-readable files (repositories, dotfiles) stay protected by the sandbox allowlist, as without accounts.
 
 ```bash
+cd "$(npm root -g)/nuncius"                                             # where the scripts are (from a clone: the clone)
 sudo ./scripts/task-accounts/setup.sh                                   # once: accounts, a sudo rule (only down to these accounts), home pass-through, firewall
 claude setup-token                                                      # Claude needs a long-lived token as a task account
 security add-generic-password -U -a "$USER" -s nuncius-claude-token -w  # paste it as one piece (in macOS Terminal)
@@ -393,6 +393,8 @@ nuncius config set concurrency.total 2
 ## Development
 
 ```bash
+git clone https://github.com/sdirkse/nuncius.git && cd nuncius
+npm link        # puts this clone's `nuncius` on PATH, instead of the npm package
 npm test
 ```
 
