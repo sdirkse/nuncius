@@ -252,6 +252,8 @@ What it measures today:
 | Limits | 5-hour and weekly window %, asked from Codex itself (`codex app-server`, outside the sandbox) and from your own `~/.codex/sessions` | own caps: runs, agent minutes and tokens per day | 5-hour and weekly window %, via the statusline bridge; otherwise daily caps |
 | Model used | from its session rollout | from its chat store | from `modelUsage` in its result |
 
+The session files the model is read from are copied to `~/.nuncius/runs/<id>-evidence/`. A file over 20 MiB (images are inlined as base64) is copied as `<name>.trimmed`, with every base64 run of 1 KiB or more replaced by a short marker and the copy cut at 20 MiB; files over 256 MiB are not read.
+
 ## Configuration
 
 Run `nuncius setup` once to get going (see [Quick start](#quick-start)). After that, change any setting with `nuncius config`; there's no need to open a file.

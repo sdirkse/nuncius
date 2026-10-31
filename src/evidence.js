@@ -6,13 +6,22 @@ import { parseClaudeJson } from './runners/claude.js';
 // Proof of what actually ran, collected from the target's own records before its throw-away dirs
 // are removed. These files are written by the target CLI inside the sandbox, so they show what the
 // CLI recorded (not something the nuncius can vouch for); the raw copies make every claim checkable.
+// A file over MAX_FILE is copied trimmed, as <name>.trimmed, with its base64 payloads (images) left out.
 //   claude: model ids in `modelUsage` of its JSON result (reported per model by the API usage)
 //   codex:  `turn_context.model` in its session rollout
 //   cursor: `modelName` in its chat store
 
-const MAX_FILE = 20 * 1024 * 1024;
+const MAX_FILE = 20 * 1024 * 1024; // what is kept and copied of one file
 const MAX_FILES = 200;
 const MAX_TOTAL = 100 * 1024 * 1024; // all evidence files of one task together
+// A larger file (images inlined as base64 make them big) is read in chunks and kept trimmed: every
+// run of MIN_RUN or more base64 characters is replaced by a short marker. Hard limits keep a huge
+// file from stalling a task: files over MAX_SCAN are skipped, and at most MAX_SCAN_TOTAL bytes of
+// large files are read per task.
+const MAX_SCAN = 256 * 1024 * 1024;
+const MAX_SCAN_TOTAL = 512 * 1024 * 1024;
+const CHUNK = 1024 * 1024;
+const MIN_RUN = 1024;
 
 // Regular files only (no symlinks: the target controls these dirs), bounded in size and count.
 // The caller seals the dirs first (see sealDirs in tasks.js), so nothing can change them while
@@ -56,15 +65,21 @@ function realDir(base, ...parts) {
 }
 
 // Read a file without following a symlink in its last component, and only if it is still a
-// regular file within the size limit (no FIFOs or devices: O_NONBLOCK keeps open from hanging).
-function readRegular(file) {
+// regular file within the size limits (no FIFOs or devices: O_NONBLOCK keeps open from hanging).
+// Returns { data } for a file up to MAX_FILE, { data, trimmed } for a larger one (see trimFile).
+function readRegular(file, scan) {
   let fd;
   try {
     fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const st = fs.fstatSync(fd);
     // nlink > 1: a hard link to a file elsewhere (the sandbox already refuses links to denied
     // files; this keeps nuncius from copying one even if a link slipped through).
-    if (!st.isFile() || st.nlink > 1 || st.size > MAX_FILE) return null;
+    if (!st.isFile() || st.nlink > 1) return null;
+    if (st.size > MAX_FILE) {
+      if (st.size > MAX_SCAN || scan.left < st.size) return null;
+      scan.left -= st.size;
+      return trimFile(fd, st.size);
+    }
     const buf = Buffer.alloc(st.size);
     let off = 0;
     while (off < st.size) {
@@ -72,12 +87,72 @@ function readRegular(file) {
       if (n === 0) break;
       off += n;
     }
-    return buf.subarray(0, off);
+    return { data: buf.subarray(0, off) };
   } catch {
     return null;
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
+}
+
+const B64 = new Uint8Array(256);
+for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=') B64[c.charCodeAt(0)] = 1;
+
+// Stream a large file through a fixed-size chunk and keep it with its base64 payloads removed:
+// each run of MIN_RUN or more base64 characters becomes "<nuncius: N base64 bytes removed>". The
+// marker has no quote or backslash, so a JSON line stays valid JSON; everything else (model
+// fields, tool calls, text) is kept byte for byte. Memory stays bounded: one chunk, one pending
+// run of under MIN_RUN bytes and the output, which stops at MAX_FILE (then `truncated` is set
+// and the rest of the file is not read).
+function trimFile(fd, size) {
+  const out = Buffer.alloc(MAX_FILE);
+  let outLen = 0;
+  let truncated = false;
+  const emit = (src, start, end) => {
+    const room = MAX_FILE - outLen;
+    if (end - start > room) {
+      end = start + room;
+      truncated = true;
+    }
+    outLen += src.copy(out, outLen, start, end);
+  };
+  const pending = Buffer.alloc(MIN_RUN);
+  let run = 0;
+  let removed = 0;
+  const endRun = () => {
+    if (run >= MIN_RUN) {
+      const marker = Buffer.from(`<nuncius: ${run} base64 bytes removed>`);
+      emit(marker, 0, marker.length);
+      removed += run;
+    } else if (run) {
+      emit(pending, 0, run);
+    }
+    run = 0;
+  };
+  const chunk = Buffer.alloc(CHUNK);
+  let pos = 0;
+  while (pos < size && !truncated) {
+    const n = fs.readSync(fd, chunk, 0, Math.min(CHUNK, size - pos), pos);
+    if (n === 0) break;
+    pos += n;
+    let i = 0;
+    while (i < n && !truncated) {
+      let j = i;
+      if (B64[chunk[i]]) {
+        while (j < n && B64[chunk[j]]) j++;
+        if (run < MIN_RUN) chunk.copy(pending, run, i, Math.min(j, i + MIN_RUN - run));
+        run += j - i;
+      } else {
+        while (j < n && !B64[chunk[j]]) j++;
+        endRun();
+        emit(chunk, i, j);
+      }
+      i = j;
+    }
+  }
+  if (!truncated) endRun();
+  // A copy at its own size: the MAX_FILE buffer is not kept alive per file.
+  return { data: Buffer.from(out.subarray(0, outLen)), trimmed: { size, read: pos, removed, truncated } };
 }
 
 const uniq = (xs) => [...new Set(xs.filter((x) => typeof x === 'string' && x && x.length < 200))];
@@ -163,28 +238,33 @@ export function collectEvidence({ id, target, rawStdout = '', codexHomeDir, curs
   // Read each file once, safely; models, actions and the audit copy all come from that one read.
   const files = [];
   let total = 0;
+  const scan = { left: MAX_SCAN_TOTAL };
   for (const p of paths) {
     const rel = path.relative(root, p);
     if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
-    const data = readRegular(p);
-    if (!data) continue;
-    if (total + data.length > MAX_TOTAL) break;
-    total += data.length;
-    files.push({ path: p, rel, data });
+    const read = readRegular(p, scan);
+    if (!read) continue;
+    if (total + read.data.length > MAX_TOTAL) break;
+    total += read.data.length;
+    files.push({ path: p, rel, ...read });
   }
   const models = target === 'claude' ? claudeModels(rawStdout)
     : target === 'codex' ? codexModels(files)
     : target === 'cursor' ? cursorModels(files.filter((f) => f.path.endsWith('store.db')))
     : [];
   const copied = [];
+  const trimmed = [];
   if (files.length) {
     const dest = path.join(runsDir(), `${id}-evidence`);
     for (const f of files) {
-      const to = path.join(dest, f.rel);
+      // A trimmed copy is not the original file (a trimmed store.db is no longer a database), so
+      // its name says so.
+      const to = path.join(dest, f.trimmed ? `${f.rel}.trimmed` : f.rel);
       try {
         fs.mkdirSync(path.dirname(to), { recursive: true });
         fs.writeFileSync(to, f.data, { flag: 'wx' });
         copied.push(to);
+        if (f.trimmed) trimmed.push({ file: to, ...f.trimmed });
       } catch {
         // a failed audit copy must not lose the models and actions read above
       }
@@ -196,5 +276,5 @@ export function collectEvidence({ id, target, rawStdout = '', codexHomeDir, curs
   } catch {
     // never fail a task over its audit trail
   }
-  return { models, source: source ?? null, files: copied, actions };
+  return { models, source: source ?? null, files: copied, ...(trimmed.length ? { trimmed } : {}), actions };
 }
