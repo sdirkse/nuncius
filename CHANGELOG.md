@@ -4,6 +4,10 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The model a task really used is found again when the tool's session file is over 20 MiB, as it is when images are inlined (Cursor chat stores of reviews with images, Codex rollouts with generated images). Such files were skipped whole, so `modelsReported` stayed empty. They are now read in chunks and copied to `~/.nuncius/runs/<id>-evidence/` as `<name>.trimmed`, with their base64 payloads left out; files over 256 MiB are still not read.
+
 ## [0.2.1] - 2026-10-29
 
 ### Changed
