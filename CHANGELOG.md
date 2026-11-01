@@ -4,6 +4,12 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-01
+
+### Fixed
+
+- The model a task really used is found again when the tool's session file is over 20 MiB, as it is when images are inlined (Cursor chat stores of reviews with images, Codex rollouts with generated images). Such files were skipped whole, so `modelsReported` stayed empty. They are now read in chunks and copied to `~/.nuncius/runs/<id>-evidence/` as `<name>.trimmed`, with their base64 payloads left out; files over 256 MiB are still not read.
+
 ## [0.2.1] - 2026-10-29
 
 ### Changed
@@ -43,7 +49,8 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 First public version: an MCP server and CLI that hand coding tasks to Codex, Cursor and Claude on your own subscriptions, each task sandboxed in its own git worktree, with usage logging, budgets and a dashboard.
 
-[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/sdirkse/nuncius/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/sdirkse/nuncius/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/sdirkse/nuncius/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/sdirkse/nuncius/releases/tag/v0.1.0

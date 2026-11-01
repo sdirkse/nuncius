@@ -69,6 +69,12 @@ fs.writeFileSync(
   path.join(dir, `rollout-2026-10-17T12-00-00-${threadId}.jsonl`),
   [
     { timestamp: new Date().toISOString(), type: 'session_meta', payload: { id: threadId } },
+    // FAKE_CODEX_IMAGES=<n>: n generated images inlined as base64, as Codex records them (~3 MB each).
+    ...Array.from({ length: Number(process.env.FAKE_CODEX_IMAGES ?? 0) }, (_, i) => ({
+      timestamp: new Date().toISOString(),
+      type: 'response_item',
+      payload: { type: 'custom_tool_call_output', output: [{ type: 'input_text', text: `image ${i}` }, { type: 'input_image', image_url: `data:image/png;base64,${Buffer.alloc(2_200_000, i + 1).toString('base64')}` }] },
+    })),
     { timestamp: new Date().toISOString(), type: 'turn_context', payload: { model: args[args.indexOf('--model') + 1] && args.includes('--model') ? args[args.indexOf('--model') + 1] : 'fake-default' } },
     {
       timestamp: new Date().toISOString(),

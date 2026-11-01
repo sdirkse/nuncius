@@ -129,12 +129,23 @@ test('run_task finishes synchronously when quick', async () => {
   assert.equal(log[0].caller, 'claude-code');
 });
 
+// A task whose worker has not started yet is still queued (a slow CI runner can take longer than
+// wait_seconds): poll until it has left the queue.
+async function untilStarted(call, id) {
+  for (let i = 0; i < 100; i++) {
+    const t = (await call('get_task', { id })).structuredContent;
+    if (t.state !== 'queued') return t;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.fail(`task ${id} is still queued after 5 s`);
+}
+
 test('run_task hands back an id when slow, wait_task collects the result', async () => {
   const { call } = await startServer();
   const started = (await call('run_task', { target: 'cursor', prompt: 'refactor SLEEP:1500', cwd: repo, wait_seconds: 0.2 })).structuredContent;
-  assert.equal(started.state, 'running');
+  assert.match(started.state, /^(queued|running)$/);
   assert.match(started.next, /wait_task/);
-  const peek = (await call('get_task', { id: started.id })).structuredContent;
+  const peek = await untilStarted(call, started.id);
   assert.equal(peek.state, 'running');
   const done = (await call('wait_task', { id: started.id, timeout_seconds: 10 })).structuredContent;
   assert.equal(done.state, 'done');
@@ -144,7 +155,8 @@ test('run_task hands back an id when slow, wait_task collects the result', async
 test('a running task reports its progress; a finished one keeps it', async () => {
   const { call } = await startServer();
   const started = (await call('run_task', { target: 'cursor', prompt: 'refactor WRITE:a.txt SLEEP:2500', cwd: repo, wait_seconds: 0.2 })).structuredContent;
-  assert.equal(started.state, 'running');
+  assert.match(started.state, /^(queued|running)$/);
+  await untilStarted(call, started.id);
   // Progress is saved at most every few seconds; the first events arrive straight away.
   let peek;
   for (let i = 0; i < 40; i++) {
@@ -186,8 +198,8 @@ test('queue respects the per-target limit and runs FIFO', async () => {
   writeConfig({ concurrency: { perTarget: 1, total: 4 } });
   const { call } = await startServer();
   const a = (await call('run_task', { target: 'codex', prompt: 'first SLEEP:1200', cwd: repo, wait_seconds: 0.3 })).structuredContent;
+  assert.equal((await untilStarted(call, a.id)).state, 'running');
   const b = (await call('run_task', { target: 'codex', prompt: 'second', cwd: repo, wait_seconds: 0.3 })).structuredContent;
-  assert.equal(a.state, 'running');
   assert.equal(b.state, 'queued');
   const q = (await call('usage', {})).structuredContent.queue;
   assert.deepEqual(q.perTarget.codex, { running: 1, queued: 1 });

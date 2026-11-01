@@ -416,6 +416,19 @@ test('model evidence is collected from the target\'s own records before cleanup'
   assert.deepEqual(lastTask().evidence.actions, [{ tool: 'Write', detail: 'c.txt' }, { tool: 'Bash', detail: 'node --test' }]);
 });
 
+test('model evidence survives a session rollout over 20 MiB (generated images inlined)', () => {
+  const r = nuncius(['codex', 'x', '--', '--model', 'gpt-test-1'], { extraEnv: { FAKE_CODEX_IMAGES: '11' } });
+  assert.equal(r.status, 0, r.stderr);
+  const t = lastTask();
+  assert.deepEqual(t.evidence.models, ['gpt-test-1']);
+  assert.equal(t.evidence.files.length, 1);
+  assert.match(t.evidence.files[0], /\.jsonl\.trimmed$/);
+  assert.ok(t.evidence.trimmed[0].size > 20 * 1024 * 1024 && t.evidence.trimmed[0].removed > 20 * 1024 * 1024);
+  assert.ok(fs.statSync(t.evidence.files[0]).size < 100_000, 'images left out of the copy');
+  const log = fs.readFileSync(path.join(env.NUNCIUS_HOME, 'usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(log.at(-1).modelsReported, ['gpt-test-1']);
+});
+
 test('attack: evidence collection never follows links or pipes the target planted', () => {
   // A file the target cannot read itself (inside the denied data dir).
   const secretDir = path.join(env.NUNCIUS_HOME, 'secret');
