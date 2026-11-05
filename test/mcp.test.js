@@ -63,12 +63,12 @@ function startServer(clientName = 'claude-code', extraEnv = {}) {
   });
 }
 
-test('initialize and tools/list expose the five tools', async () => {
+test('initialize and tools/list expose the six tools', async () => {
   const { init, request } = await startServer();
   assert.equal(init.result.serverInfo.name, 'nuncius');
   assert.equal(init.result.protocolVersion, '2025-06-18');
   const list = await request('tools/list');
-  assert.deepEqual(list.result.tools.map((t) => t.name), ['list_targets', 'run_task', 'get_task', 'wait_task', 'usage']);
+  assert.deepEqual(list.result.tools.map((t) => t.name), ['list_targets', 'run_task', 'get_task', 'wait_task', 'close_task', 'usage']);
   const unknown = await request('nope/method');
   assert.equal(unknown.error.code, -32601);
 });
@@ -348,7 +348,7 @@ test('initialize hands every client the delegation workflow', async () => {
   const { handle } = createHandlers({ defaultCwd: repo });
   const init = await handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'cursor' } } });
   assert.equal(init.instructions, instructions());
-  for (const step of ['list_targets', 'run_task', 'wait_task', 'worktree.review', 'sensitiveFiles', 'untrusted']) assert.ok(init.instructions.includes(step), step);
+  for (const step of ['list_targets', 'run_task', 'wait_task', 'worktree.review', 'sensitiveFiles', 'untrusted', 'close_task']) assert.ok(init.instructions.includes(step), step);
   // Aliases come from the config: the text names the ones that exist, not a fixed list.
   assert.match(instructions({ aliases: { quick: { target: 'cursor' }, second: { target: 'other' } } }), /alias: quick, second \(never picks your own tool\)/);
   assert.doesNotMatch(instructions({ aliases: {} }), /alias/);
@@ -421,4 +421,75 @@ test('a cancelled wait stops and gets no reply; the task runs on', async () => {
   const later = await call('wait_task', { id, timeout_seconds: 30 });
   assert.equal(later.structuredContent.state, 'done', 'the task itself was not cancelled');
   assert.equal(replied, false, 'the cancelled request got no reply');
+});
+
+// --- Closing a task's worktree ---
+
+const branchExists = (b) => spawnSync('git', ['-C', repo, 'branch', '--list', b], { encoding: 'utf8' }).stdout.trim() !== '';
+
+test('close_task removes a finished task\'s worktree and keeps the branch with its unapplied work', async () => {
+  const { call } = await startServer();
+  const t = (await call('run_task', { target: 'codex', prompt: 'add WRITE:a.txt', cwd: repo, wait_seconds: 30 })).structuredContent;
+  assert.equal(t.state, 'done');
+  assert.match(t.next, new RegExp(`call close_task with id "${t.id}"`));
+  // The worktree's path is not in the result of a task with changes: read it from the record.
+  const rec = JSON.parse(fs.readFileSync(path.join(env.NUNCIUS_HOME, 'tasks', `${t.id}.json`), 'utf8'));
+  assert.ok(fs.existsSync(rec.worktree.path));
+  const closed = (await call('close_task', { id: t.id })).structuredContent;
+  assert.equal(closed.closed, true);
+  assert.equal(closed.branchDeleted, false, 'the work is not in the repo, so its branch stays');
+  assert.equal(fs.existsSync(rec.worktree.path), false);
+  assert.ok(branchExists(t.worktree.branch));
+  const after = (await call('get_task', { id: t.id })).structuredContent;
+  assert.equal(after.worktree.removed, true);
+  assert.doesNotMatch(after.next, /close_task/, 'a closed task is not asked to be closed again');
+  // Closing twice is harmless.
+  assert.equal((await call('close_task', { id: t.id })).structuredContent.closed, true);
+});
+
+test('close_task refuses a task that is still running, and an unknown id', async () => {
+  const { call } = await startServer();
+  const t = (await call('run_task', { target: 'cursor', prompt: 'refactor SLEEP:1500', cwd: repo, wait_seconds: 0.2 })).structuredContent;
+  const res = await call('close_task', { id: t.id });
+  assert.ok(res.isError);
+  assert.match(res.content[0].text, /still (queued|running)/);
+  assert.ok((await call('close_task', { id: 'nope' })).isError);
+  await call('wait_task', { id: t.id, timeout_seconds: 10 });
+});
+
+test('keep: true leaves a worktree alone until it is closed, also for nuncius cleanup', async () => {
+  const { call } = await startServer();
+  const t = (await call('run_task', { target: 'codex', prompt: 'add WRITE:b.txt', cwd: repo, wait_seconds: 30 })).structuredContent;
+  const kept = (await call('close_task', { id: t.id, keep: true })).structuredContent;
+  assert.equal(kept.kept, true);
+  assert.ok(fs.existsSync(kept.path));
+  const got = (await call('get_task', { id: t.id })).structuredContent;
+  assert.equal(got.worktree.keep, true);
+  assert.doesNotMatch(got.next, /close_task/, 'a kept worktree is not nagged about');
+  const cleanup = spawnSync('node', [path.join(root, 'bin', 'nuncius.js'), 'cleanup', '--days', '0'], { env, cwd: repo, encoding: 'utf8' });
+  assert.match(cleanup.stdout, /kept .*marked keep/);
+  assert.ok(fs.existsSync(kept.path), 'cleanup --days 0 leaves a kept worktree');
+  // `nuncius close <id>` closes it from the command line.
+  const close = spawnSync('node', [path.join(root, 'bin', 'nuncius.js'), 'close', t.id], { env, cwd: repo, encoding: 'utf8' });
+  assert.equal(close.status, 0, close.stderr);
+  assert.match(close.stdout, new RegExp(`closed ${t.id}, kept branch nuncius/codex/`));
+  assert.equal(fs.existsSync(kept.path), false);
+});
+
+test('run_task and list_targets remind a client of the open worktrees of tasks it started', async () => {
+  const other = await startServer('other-client');
+  const theirs = (await other.call('run_task', { target: 'codex', prompt: 'theirs WRITE:c.txt', cwd: repo, wait_seconds: 30 })).structuredContent;
+  assert.equal(theirs.state, 'done');
+  server.kill();
+  const { call } = await startServer();
+  assert.equal((await call('list_targets', {})).structuredContent.openWorktrees, undefined, 'nothing started here yet; another session\'s task is not ours');
+  const first = (await call('run_task', { target: 'codex', prompt: 'first WRITE:d.txt', cwd: repo, wait_seconds: 30 })).structuredContent;
+  assert.equal(first.openWorktrees, undefined, 'a task is not a reminder about itself');
+  const second = (await call('run_task', { target: 'codex', prompt: 'second, no changes', cwd: repo, wait_seconds: 30 })).structuredContent;
+  assert.deepEqual(second.openWorktrees.tasks.map((w) => w.id), [first.id], 'only the open, finished ones: the second changed nothing');
+  assert.match(second.openWorktrees.note, /^1 task\(s\) you started earlier still have an open worktree\. Call close_task/);
+  assert.equal(second.openWorktrees.tasks[0].promptPreview, 'first WRITE:d.txt');
+  assert.deepEqual((await call('list_targets', {})).structuredContent.openWorktrees.tasks.map((w) => w.id), [first.id]);
+  await call('close_task', { id: first.id, keep: true });
+  assert.equal((await call('list_targets', {})).structuredContent.openWorktrees, undefined, 'kept on purpose: no reminder');
 });

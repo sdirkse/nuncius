@@ -100,7 +100,7 @@ const FIXED = [
   ['sandbox.extraWritable', 'pathList', 'extra paths targets may write (every task!)'],
   ['worktrees.autoRemoveApplied', 'bool', 'remove a worktree once its work is in your branch'],
   ['retention.days', 'retention', 'how long nuncius keeps the prompts, answers, raw output and patches of finished tasks (the usage numbers stay; a task with an open worktree keeps everything)'],
-  ['worktrees.keepDays', 'days', 'nuncius cleanup removes unapplied worktrees older than this (their branch stays)', { values: 'days · 0 = nuncius cleanup removes every unapplied worktree' }],
+  ['worktrees.keepDays', 'days', 'nuncius cleanup removes unapplied worktrees older than this (their branch stays; worktrees kept with close_task stay too)', { values: 'days · 0 = nuncius cleanup removes every unapplied worktree' }],
   ['dashboard.port', 'port', 'port of nuncius dashboard'],
 ].map(([key, type, description, extra = {}]) => ({ key, type, description, ...extra }));
 const FIXED_BY_KEY = new Map(FIXED.map((s) => [s.key, s]));
