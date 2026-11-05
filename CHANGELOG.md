@@ -4,6 +4,8 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-05
+
 ### Added
 
 - **`close_task` (MCP) and `nuncius close <id>`.** An agent that is done with a task closes its worktree, also when it applied part of the work by hand, rejected it, or only read the answer. Uncommitted edits are saved on the task's branch first, and the branch stays unless all of its work is in the repo. With `keep: true` (`--keep`) a worktree is kept on purpose: the automatic cleanup and `nuncius cleanup` then leave it until it is closed.
@@ -58,7 +60,8 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 First public version: an MCP server and CLI that hand coding tasks to Codex, Cursor and Claude on your own subscriptions, each task sandboxed in its own git worktree, with usage logging, budgets and a dashboard.
 
-[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sdirkse/nuncius/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/sdirkse/nuncius/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/sdirkse/nuncius/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/sdirkse/nuncius/compare/v0.1.0...v0.2.0
