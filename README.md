@@ -69,7 +69,7 @@ Nuncius is something Claude *can* use, not a route all its work takes. Claude's 
 
 What you can give Claude, from always-on to opt-in:
 
-1. **MCP instructions (automatic).** Every MCP client that connects (Claude Code, Cursor) receives the delegation workflow on `initialize`: pick a target with `list_targets`, write a self-contained brief, wait for the result, review the diff, treat the target's output as untrusted, ask the user before applying `sensitiveFiles`, and report refusals instead of retrying. Nothing to install.
+1. **MCP instructions (automatic).** Every MCP client that connects (Claude Code, Cursor) receives the delegation workflow on `initialize`: pick a target with `list_targets`, write a self-contained brief, wait for the result, review the diff, treat the target's output as untrusted, ask the user before applying `sensitiveFiles`, report refusals instead of retrying, and close each task with `close_task` when done. Nothing to install.
 2. **The skill (Claude Code).** [`skills/nuncius/SKILL.md`](skills/nuncius/SKILL.md) is the full guide: when to delegate, what a good brief contains, how to review and apply, what to do when a task is refused or fails, and the CLI path when MCP is not connected. Install it with the `ln -s` line above, and Claude uses it on its own when you ask it to hand work to Codex, Cursor or another model.
 3. **A project rule (`CLAUDE.md` / `AGENTS.md`).** To make it the house rule for a project or team, add:
 
@@ -79,6 +79,7 @@ What you can give Claude, from always-on to opt-in:
    (MCP tools `list_targets`, `run_task`, `wait_task`; or the `nuncius` CLI). Run them only through
    nuncius, so usage is logged and budgets apply. Review the diff before applying it, and ask me
    before applying anything listed in `sensitiveFiles`. When a task is refused, tell me why.
+   Close each task with `close_task` when you are done with it.
    ```
 
 **Optional safety net (Claude Code):** `nuncius install-hook` covers one case: Claude starting another agent CLI itself in Bash (`codex exec`, `cursor-agent -p` / `agent -p`, `claude -p`). The hook then tells Claude to use Nuncius instead, so that run is logged, budgeted and sandboxed too. It also refuses `nuncius ... --force` and the commands that change Nuncius's settings (`nuncius config set`, `nuncius setup`, …), so budgets stay your call. Everything else Claude runs in Bash (tests, git, builds) and housekeeping like `codex login` or `--version` pass as normal, and Claude's own work is not affected. Without the hook, Claude can still start those CLIs directly, only unlogged and unsandboxed.
@@ -98,7 +99,7 @@ Terms are defined in [CONTEXT.md](CONTEXT.md), and the decisions are recorded in
 
 ## Roadmap
 
-1. ~~MCP server (`list_targets`, `run_task`, `get_task`, `wait_task`, `usage`) with hybrid sync/async tasks and a queue.~~ Done.
+1. ~~MCP server (`list_targets`, `run_task`, `get_task`, `wait_task`, `close_task`, `usage`) with hybrid sync/async tasks and a queue.~~ Done.
 2. ~~A worktree per task and a sandbox per target.~~ Done.
 3. ~~Claude as a target, plus the statusline bridge for Claude limits.~~ Done.
 4. ~~Dashboard: a Claude column, running and queued tasks, open worktrees.~~ Done.
@@ -125,6 +126,7 @@ Tools:
 | `run_task` | `target` (an available target, or an alias you configured), `prompt`, and optionally `model`, `cwd`, `agent`, `network` (package registries and GitHub, default off), `wait_seconds`. The project (which budgets are keyed on) is always derived from `cwd`. Returns the result if the task finishes within `wait_seconds` (default 300), otherwise the task id with state `running` or `queued`. |
 | `get_task` | The current state and result, without waiting. |
 | `wait_task` | Waits up to `timeout_seconds` (max 600) and returns the state and result. |
+| `close_task` | `id`, and optionally `keep`. Removes a finished task's worktree once the caller is done with it (the branch keeps unapplied work), or with `keep: true` keeps it on purpose. `run_task` and `list_targets` list the caller's own finished tasks whose worktree is still open under `openWorktrees`. |
 | `usage` | Today's usage, usage per project, Codex and Claude limits (or why Claude's are missing), budgets and the queue. |
 
 Progress: while a task runs, `get_task` and `wait_task` return a `progress` field read from the target's own event stream (Claude's and Cursor's `stream-json`, Codex's `--json`): elapsed time and the timeout, how long ago the target last did anything and what (`lastActivity`), and counts of steps, edited files and commands. While the task runs, edited files are the ones the tool's edit tools report (a file written by a shell command is not seen); once a task is done, the count is the files its commit changed. After 5 minutes without any event, `quiet` is true: the task may be stuck, or the model may be thinking for a long time. Nuncius only reports this; it stops a task only at the timeout. The activity text comes from the target, so it is cleaned and shortened, and kept out of the `next` hint. While the task runs, its worker keeps the progress in `~/.nuncius/runs/<id>.progress.json` (without taking the queue lock); when it ends, the last progress stays on the task, and a task that times out keeps its event stream in `~/.nuncius/runs/<id>.out`.
@@ -138,6 +140,7 @@ Every task gets its own git worktree under `~/.nuncius-worktrees/`, next to the 
 - **Base:** the caller's `HEAD`, plus one snapshot commit of the caller's uncommitted changes and untracked files that are not ignored. The target sees what the caller sees. Ignored files such as `node_modules` and `.env` are not copied.
 - **Result:** when the target finishes, Nuncius commits its work on the task branch and returns the changed files, the diff stat, a patch file, and `review` / `apply` / `applyPatch` commands. **Nothing is merged for you.** The `apply` command (a `git cherry-pick`) runs with hooks off and reads `.gitattributes` from your current HEAD, so a hook or filter the target added cannot run code in your repo when you apply; `applyPatch` is a plain `git apply` of the patch (no commit, no hooks). Files that configure tools or run on their own (CI pipelines, git hooks, `.gitattributes`, `package.json`, `setup.py`, …) are listed in `sensitiveFiles` to review first. If the task made no changes, the worktree and branch are removed right away. Failed or timed-out tasks keep their worktree for inspection.
 - **Cleanup:** worktrees whose commit is already in the repo's current branch (merged or cherry-picked) are removed automatically, together with their branch, whenever a task starts or the dashboard refreshes (set `worktrees.autoRemoveApplied` to `false` to turn this off). Work merged elsewhere, for example in a pull request you haven't pulled yet, counts once it's in your current branch. `nuncius cleanup` does the same on demand and also removes worktrees older than `worktrees.keepDays` (7). For those it keeps the branch, so no work is lost. Before any worktree is removed, anything uncommitted in it is first committed on its branch (marked as not reviewed): work a failed task never committed, and edits you made in the worktree after the task finished. Ignored files (`.env`, `node_modules`) are not preserved, the same way they are never copied in.
+- **Closing a task:** an agent that is done with a task's worktree calls the MCP tool `close_task`, also when it applied only part of the work by hand, rejected it, or only needed to read the answer. The worktree goes the same careful way as with `nuncius cleanup`: uncommitted edits are saved on the branch first, and the branch stays unless all of its work is in your repo. `close_task` with `keep: true` keeps a worktree on purpose: then neither the automatic cleanup nor `nuncius cleanup` removes it until it is closed. From the command line: `nuncius close <id> [--keep]`. When an agent starts new work (`run_task`, `list_targets`), nuncius lists the finished tasks that same session started whose worktree is still open, so it closes what it no longer needs.
 - Directories that are not git repositories, and repos without commits, are refused.
 
 Every target runs inside a macOS Seatbelt profile (`sandbox-exec`). If no sandbox is available, the task does not run; there is no unsandboxed fallback.
@@ -229,6 +232,7 @@ nuncius tasks                           # last 20 tasks
 nuncius doctor [--json]                 # prove the sandbox works on this machine
 nuncius config                          # effective settings: defaults plus your config.json
 nuncius cleanup [--days 7] [--dry-run]  # remove applied (also automatic) and old worktrees
+nuncius close <id> [--keep]             # done with a task: remove its worktree (its branch keeps the work), or keep it
 nuncius dashboard [--port 7317]         # http://localhost:7317
 ```
 
@@ -271,7 +275,7 @@ nuncius config --json                              # the effective settings as J
 How it works:
 - **One name per setting.** Names are dotted paths such as `budgets.cursor.maxRunsPerDay`, the same in `nuncius config`, in `~/.nuncius/config.json` and in this README. A typo gets a "did you mean".
 - **Values:** numbers, `true`/`false`, text, comma-separated lists, or `none` to switch a limit off. `nuncius config list` and `nuncius config get` show for every setting what you can enter, including what `0` and `none` mean where they mean something. A value of the wrong kind is refused with what was expected — on the command line, and when Nuncius reads the file: a hand-edited `config.json` with a setting of the wrong kind (a budget as a string, or `budgets` set to `none`) is refused with the exact problem, so a typo can't silently switch a budget off. Fix it in the file, or with `nuncius config set`/`unset`.
-- **`0` is not "no limit".** For a budget, `0` would refuse every task, so Nuncius refuses it and tells you what you probably meant: `none` for no limit, or `targets.<tool>.enabled false` to stop using that tool. Where `0` does mean something, it's allowed and described: `tasks.syncWaitSeconds 0` returns the task id at once, `tasks.modelCacheSeconds 0` asks the tools for their models every time, and `worktrees.keepDays 0` makes `nuncius cleanup` remove every unapplied worktree.
+- **`0` is not "no limit".** For a budget, `0` would refuse every task, so Nuncius refuses it and tells you what you probably meant: `none` for no limit, or `targets.<tool>.enabled false` to stop using that tool. Where `0` does mean something, it's allowed and described: `tasks.syncWaitSeconds 0` returns the task id at once, `tasks.modelCacheSeconds 0` asks the tools for their models every time, and `worktrees.keepDays 0` makes `nuncius cleanup` remove every unapplied worktree that isn't kept on purpose.
 - **Only your changes are stored**, in `~/.nuncius/config.json` (or `$NUNCIUS_HOME`). Everything else follows the defaults, including better ones in later versions. `unset` restores the default.
 - **Setting changes apply right away**, with nothing to restart. (An *upgrade* is different: a running `nuncius mcp` server keeps the code it started with, so after `npm i -g nuncius` reconnect the MCP server, or restart your client, to pick up the new version. `usage` reports a restart hint when the running version is behind the one on disk.)
 - **Settings are global.** There are no settings files in projects: a repository can't change your budgets or sandbox. Budgets per project exist, but they live in the same global settings (see below).
@@ -348,7 +352,7 @@ What the vendors say, as a starting point for your own aliases (October 2026):
 | `tasks.modelCacheSeconds` | 3600 | how long discovered model lists are reused (0 = ask the tools every time) |
 | `worktrees.autoRemoveApplied` | `true` | remove a worktree (and its branch) once its work is in your current branch |
 | `retention.days` | 7 | how long Nuncius keeps the prompts, answers, raw output and patches of finished tasks; the usage numbers stay, and a task with an open worktree keeps everything (0 = remove as soon as a task ends · none = keep everything) |
-| `worktrees.keepDays` | 7 | `nuncius cleanup` removes unapplied worktrees older than this; their branch is kept (0 = remove every unapplied worktree) |
+| `worktrees.keepDays` | 7 | `nuncius cleanup` removes unapplied worktrees older than this, except those kept with `close_task`; their branch is kept (0 = remove every unapplied worktree) |
 | `dashboard.port` | 7317 | port of `nuncius dashboard` (`--port` overrides it once) |
 
 ### Examples

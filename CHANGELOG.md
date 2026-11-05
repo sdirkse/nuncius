@@ -4,6 +4,15 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`close_task` (MCP) and `nuncius close <id>`.** An agent that is done with a task closes its worktree, also when it applied part of the work by hand, rejected it, or only read the answer. Uncommitted edits are saved on the task's branch first, and the branch stays unless all of its work is in the repo. With `keep: true` (`--keep`) a worktree is kept on purpose: the automatic cleanup and `nuncius cleanup` then leave it until it is closed.
+- **Reminder of open worktrees.** `run_task` and `list_targets` list the finished tasks the same session started whose worktree is still open, under `openWorktrees`.
+
+### Changed
+
+- The MCP instructions, the task hints and the Claude Code skill ask agents to close each task when they are done, and to ask for research, review and vote answers in the target's reply rather than in files.
+
 ## [0.2.2] - 2026-11-01
 
 ### Fixed

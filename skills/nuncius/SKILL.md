@@ -7,7 +7,7 @@ description: Delegate coding work to Codex, Cursor or another Claude through Nun
 
 Nuncius runs a task on another AI tool (a **target**: `codex`, `cursor` or `claude`) inside a sandbox, in its own git worktree on a `nuncius/<target>/<id>` branch. Usage is logged per project and agent, and budgets are enforced. You stay the **caller**: you write the brief, review what comes back, and apply it.
 
-Use the MCP tools (`list_targets`, `run_task`, `wait_task`, `get_task`, `usage`) when the `nuncius` server is connected; otherwise the `nuncius` CLI (see [CLI path](#cli-path)).
+Use the MCP tools (`list_targets`, `run_task`, `wait_task`, `get_task`, `close_task`, `usage`) when the `nuncius` server is connected; otherwise the `nuncius` CLI (see [CLI path](#cli-path)).
 
 ## Steps
 
@@ -21,6 +21,8 @@ Use the MCP tools (`list_targets`, `run_task`, `wait_task`, `get_task`, `usage`)
 
    Set `network: true` only when the task has to install packages. Pass `agent` with your role (e.g. `backend-dev`) so usage is attributed.
 
+   When you only need an answer (research, a review, a vote), ask for it in the target's reply, not in files: a reply leaves no worktree to clean up.
+
 3. **Run and wait.** Call `run_task`. When it returns `running` or `queued`, call `wait_task` with the id until the state is `done`, `failed`, `timeout` or `refused`. For several independent tasks, start them all first, then wait for each.
 
 4. **Review.** Done when you have read the whole diff, not only the summary:
@@ -31,10 +33,12 @@ Use the MCP tools (`list_targets`, `run_task`, `wait_task`, `get_task`, `usage`)
 
 5. **Apply or report.** Apply with `worktree.apply` (`git cherry-pick <commit>`, or `git apply <patch>`). Then tell the user what was delegated, to which target and model, what changed, and what you checked. When the work is not good enough, say so and either fix it yourself or send a sharper brief.
 
+6. **Close the task.** Call `close_task` with the task id once you are done with it: after applying, after applying only part of it by hand, after rejecting it, or after only reading the answer. The worktree goes; uncommitted edits are saved on its branch first, and the branch stays unless all of its work is in the repo, so nothing is lost. Pass `keep: true` only when you will come back to the worktree later. Done when no task you started still has an open worktree you no longer need: `run_task` and `list_targets` list yours under `openWorktrees`.
+
 ## When it does not go through
 
 - **`refused`**: a budget is reached or the call was nested. Tell the user the reasons from the result. Raising a budget, or running `nuncius ... --force` in their own terminal, is the user's decision; Nuncius and its hook refuse `--force` from agents.
-- **`failed` / `timeout`**: report `result.error`. The worktree is kept at `worktree.path` for inspection; `blockedHosts` shows hosts the target tried to reach without permission (often: it needed `network: true`).
+- **`failed` / `timeout`**: report `result.error`. The worktree is kept at `worktree.path` for inspection; close it with `close_task` when you are done. `blockedHosts` shows hosts the target tried to reach without permission (often: it needed `network: true`).
 - **`warnings`**: pass them on to the user (e.g. Codex refreshed its login inside the task).
 - **Model not available**: `list_targets` shows the models per target; omit `model` to use the target's default.
 
@@ -52,4 +56,4 @@ stdout is the target's answer; stderr ends with a usage line and, when files cha
 
 ## Housekeeping
 
-Applied and old worktrees are removed by `nuncius cleanup` (the user's call; suggest it after several tasks, or when the dashboard shows many open worktrees). Unapplied work stays on its branch.
+Close your own tasks with `close_task` (or `nuncius close <id>` on the CLI path). Applied worktrees are also removed automatically, and old ones by `nuncius cleanup` (the user's call; suggest it when the dashboard shows many open worktrees). Unapplied work stays on its branch.

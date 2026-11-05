@@ -1027,7 +1027,7 @@ export function publicTask(task) {
   const wt = task.worktree;
   if (wt) {
     out.worktree = wt.changed
-      ? { branch: wt.branch, commit: wt.commit, base: wt.base, files: wt.files, diffStat: wt.diffStat, sensitiveFiles: wt.sensitiveFiles ?? [], ...(wt.repoDrivers ? { repoDrivers: wt.repoDrivers } : {}), patch: wt.patchPath, review: wt.review, apply: wt.apply, applyPatch: wt.applyPatch }
+      ? { branch: wt.branch, commit: wt.commit, base: wt.base, files: wt.files, diffStat: wt.diffStat, sensitiveFiles: wt.sensitiveFiles ?? [], ...(wt.repoDrivers ? { repoDrivers: wt.repoDrivers } : {}), patch: wt.patchPath, review: wt.review, apply: wt.apply, applyPatch: wt.applyPatch, ...(wt.removed ? { removed: true } : wt.keep ? { keep: true } : {}) }
       : wt.removed
         ? { branch: wt.branch, changed: false, removed: true }
         : { branch: wt.branch, path: wt.path, kept: true };
@@ -1035,11 +1035,12 @@ export function publicTask(task) {
       out.next = `Review the changes (worktree.review) and decide yourself whether to apply them (worktree.apply). Nothing has been merged into your branch.` +
         // Only a count here: file names are target-controlled and this field reads as instructions.
         (wt.sensitiveFiles?.length ? ` WARNING: ${wt.sensitiveFiles.length} changed file(s) configure tools or run code (listed in worktree.sensitiveFiles); review those with extra care and tell the user before applying.` : '') +
-        (wt.repoDrivers?.length ? ' This repo has git filter/merge drivers that run code from the repo (worktree.repoDrivers): applying runs them outside the sandbox with the task\'s changes, so every changed file is flagged.' : '');
+        (wt.repoDrivers?.length ? ' This repo has git filter/merge drivers that run code from the repo (worktree.repoDrivers): applying runs them outside the sandbox with the task\'s changes, so every changed file is flagged.' : '') +
+        (wt.removed || wt.keep ? '' : ` When you are done with it, call close_task with id "${task.id}": also when you applied only part of it by hand, rejected it, or only needed to read it. Pass keep: true if you will still need the worktree later.`);
     if (task.state === 'done' && wt.changed === false) out.next = 'The target made no file changes.';
     // Only while it still exists: a task that failed before the target ran has no worktree left.
     if ((task.state === 'failed' || task.state === 'timeout') && !wt.removed && !wt.changed)
-      out.next = `The worktree is kept for inspection at ${wt.path}. \`nuncius cleanup\` later saves any changes in it on ${wt.branch} and removes the checkout.`;
+      out.next = `The worktree is kept for inspection at ${wt.path}. When you are done with it, call close_task with id "${task.id}": it saves any changes in it on ${wt.branch} and removes the checkout.`;
   }
   // Times and counts only: the activity label is target-controlled and this field reads as instructions.
   if (!TERMINAL.has(task.state)) out.next = `Still ${task.state}${runningNote(progress)}. Call wait_task with id "${task.id}" to keep waiting, or get_task to check without waiting.`;

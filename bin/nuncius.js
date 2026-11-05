@@ -18,6 +18,7 @@ Usage:
   nuncius tasks [--json]          last 20 tasks and their state
   nuncius doctor [--json]         prove the sandbox works on this machine (run once after installing)
   nuncius cleanup [--days <n>] [--dry-run]   remove applied or old task worktrees
+  nuncius close <id> [--keep]     done with a task: remove its worktree (its branch keeps the work), or keep it
   nuncius claude [options] "<prompt>" [-- --model <alias|id> | --max-turns <n>]
   nuncius mcp                     MCP server over stdio (for Claude Code, Cursor)
   nuncius install-statusline      record Claude's 5h/weekly limits via your Claude Code statusline
@@ -58,6 +59,7 @@ function parseArgs(argv) {
     else if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--days') opts.days = Number(argv[++i]);
     else if (a === '--raw') opts.raw = true;
+    else if (a === '--keep') opts.keep = true;
     else if (a === '--json') opts.json = true;
     else if (a === '-h' || a === '--help') opts.help = true;
     else rest.push(a);
@@ -269,6 +271,22 @@ async function main() {
       if (a.kept) console.log(`kept ${displayName(a.path)} (${a.reason})`);
       else console.log(`${opts.dryRun ? 'would remove' : 'removed'} ${displayName(a.path)} (${a.reason})${a.branchDeleted ? `, deleted ${a.branch}` : `, kept branch ${a.branch}`}${a.savedCommit ? `, saved its unfinished work as ${a.savedCommit.slice(0, 12)}` : ''}`);
     }
+    return 0;
+  }
+  if (cmd === 'close') {
+    if (!rest[0]) {
+      console.error(`nuncius close: missing task id\n\n${HELP}`);
+      return 2;
+    }
+    const { closeTask } = await import('../src/cleanup.js');
+    const r = closeTask(rest[0], { keep: opts.keep });
+    if (r.error) {
+      console.error(`nuncius close: ${r.error}`);
+      return r.path ? 1 : 2;
+    }
+    if (r.kept) console.log(`kept ${displayName(r.path)} until you close it`);
+    else if (!r.branch) console.log(r.note);
+    else console.log(`closed ${rest[0]}${r.branchDeleted ? `, deleted ${r.branch}` : `, kept branch ${r.branch}`}${r.savedCommit ? `, saved its unfinished work as ${r.savedCommit.slice(0, 12)}` : ''}`);
     return 0;
   }
   if (cmd === 'mcp') {
