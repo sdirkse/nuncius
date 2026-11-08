@@ -524,6 +524,35 @@ test('a repo .gitattributes cannot run a filter driver while nuncius snapshots i
   });
 });
 
+test('counting what a reply-only target left does not run a filter it planted in a submodule', async () => {
+  await withEnv(async () => {
+    const { createWorktree, leftoverCount, removeWorktree } = await import('../src/worktree.js');
+    const sub = initRepo(path.join(home, 'subrepo'));
+    const g = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, stdio: 'ignore' });
+    g(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'sub');
+    g(repo, 'commit', '-q', '-m', 'add submodule');
+    const wt = createWorktree({ cwd: repo, id: '22222222-0000-4000-8000-000000000009', target: 'codex' });
+    // The target turns the empty submodule folder into a repository of its own with a filter driver.
+    const s = path.join(wt.path, 'sub');
+    g(s, 'init', '-q');
+    fs.writeFileSync(path.join(s, 'f.txt'), 'one\n');
+    g(s, 'add', 'f.txt');
+    g(s, 'commit', '-q', '-m', 'x');
+    g(s, 'config', 'filter.evil.clean', `sh -c 'echo PWNED >> ${home}/marks; cat'`);
+    fs.writeFileSync(path.join(s, '.git', 'info', 'attributes'), '* filter=evil\n');
+    fs.writeFileSync(path.join(s, 'f.txt'), 'two\n');
+    // A staged rename whose old path looks like a status line counts once.
+    fs.writeFileSync(path.join(wt.path, 'ab notes.txt'), 'n\n');
+    g(wt.path, 'add', 'ab notes.txt');
+    g(wt.path, 'commit', '-q', '-m', 'n');
+    g(wt.path, 'mv', 'ab notes.txt', 'moved.txt');
+    fs.rmSync(path.join(home, 'marks'), { force: true });
+    assert.equal(leftoverCount(wt), 1);
+    assert.equal(fs.existsSync(path.join(home, 'marks')), false, 'the planted filter did not run on the host');
+    removeWorktree(wt, { deleteBranch: true });
+  });
+});
+
 test('the sensitive-file list covers CI pipelines and Python entry points', async () => {
   const { sensitiveFiles } = await import('../src/worktree.js');
   const names = ['.circleci/config.yml', 'Jenkinsfile', 'azure-pipelines.yml', '.buildkite/pipeline.yml', 'setup.py', 'conftest.py', 'pyproject.toml', 'src/app.js'];

@@ -493,3 +493,31 @@ test('run_task and list_targets remind a client of the open worktrees of tasks i
   await call('close_task', { id: first.id, keep: true });
   assert.equal((await call('list_targets', {})).structuredContent.openWorktrees, undefined, 'kept on purpose: no reminder');
 });
+
+test('reply_only: the target is told to answer in its reply, and nothing is left to apply or close', async () => {
+  const { call } = await startServer();
+  const t = (await call('run_task', { target: 'codex', prompt: 'research WRITE:report.md', cwd: repo, wait_seconds: 30, reply_only: true })).structuredContent;
+  assert.equal(t.state, 'done');
+  assert.deepEqual(t.worktree, { replyOnly: true, removed: true, discardedFiles: 1 });
+  assert.match(t.next, /^Reply-only task: the answer is in result\.output/);
+  assert.match(t.next, /The target wrote 1 file\(s\) or folder\(s\) there; they were thrown away/);
+  assert.doesNotMatch(t.next, /report\.md/, 'names are target-controlled: only a count');
+  assert.doesNotMatch(t.next, /close_task|worktree\.apply/);
+  const rec = JSON.parse(fs.readFileSync(path.join(env.NUNCIUS_HOME, 'tasks', `${t.id}.json`), 'utf8'));
+  assert.equal(rec.replyOnly, true);
+  assert.equal(fs.existsSync(rec.worktree.path), false);
+  assert.equal(branchExists(rec.worktree.branch), false);
+  const { withPreamble } = await import('../src/tasks.js');
+  assert.match(withPreamble(rec), /Give your complete answer in your final reply/);
+  assert.match(withPreamble(rec), /every file you write here is thrown away/);
+  assert.doesNotMatch(withPreamble(rec), /nuncius commits your work/);
+  assert.match(withPreamble({ ...rec, replyOnly: undefined }), /nuncius commits your work/);
+  // Not offered for closing afterwards.
+  assert.equal((await call('list_targets', {})).structuredContent.openWorktrees, undefined);
+  // A failed reply-only task is removed too, and says so instead of offering inspection.
+  const f = (await call('run_task', { target: 'codex', prompt: 'research WRITE:x.md FAIL', cwd: repo, wait_seconds: 30, reply_only: true })).structuredContent;
+  assert.equal(f.state, 'failed');
+  assert.equal(f.worktree.removed, true);
+  assert.match(f.next, /^Reply-only task: its worktree is already removed/);
+  assert.doesNotMatch(f.next, /close_task|for inspection/);
+});

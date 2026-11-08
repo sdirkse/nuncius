@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { initRepo } from './helpers.js';
 import { hostAllowed, startProxy } from '../src/proxy.js';
 import { claudeUsage } from '../src/runners/claude.js';
-import { limitsFromStatusline } from '../src/claude-limits.js';
+import { limitsFromStatusline, limitsFromStreamJson } from '../src/claude-limits.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = path.join(root, 'test', 'fixtures');
@@ -81,6 +81,76 @@ test('claude target: runs headless with locked-down flags, logs tokens, commits 
   assert.equal(t.result.usage.totalTokens, 2510 + 105 + 70);
   assert.equal(t.result.usage.apiCostEstimateUsd, 0.0123);
   assert.ok(t.egress.allow.includes('api.anthropic.com'));
+});
+
+test('a Claude task records the limits from its own rate_limit_event', () => {
+  const before = Date.now();
+  const r = nuncius(['claude', 'hello'], { extraEnv: { FAKE_RATE_LIMITS: '0.37,0.215', FAKE_AFTER_LIMITS_MS: '1500' } });
+  assert.equal(r.status, 0, r.stderr);
+  const limits = JSON.parse(fs.readFileSync(path.join(env.NUNCIUS_HOME, 'claude-limits.json'), 'utf8'));
+  // Stamped when the event arrived, not when the task ended.
+  assert.ok(Date.parse(limits.observedAt) >= before && Date.parse(limits.observedAt) < Date.now() - 1000, limits.observedAt);
+  assert.equal(limits.source, 'claude task');
+  assert.equal(limits.primary.usedPercent, 37);
+  assert.equal(limits.secondary.usedPercent, 21.5);
+  assert.equal(limits.secondary.windowMinutes, 10080);
+  assert.ok(Date.parse(limits.primary.resetsAt) > Date.now());
+  assert.match(r.stderr, /5h 37% · week 21.5%/);
+  // The budget uses them: over max5HourPercent (90 by default) the next Claude task is refused.
+  assert.equal(nuncius(['claude', 'again'], { extraEnv: { FAKE_RATE_LIMITS: '0.95,0.2' } }).status, 0);
+  assert.equal(nuncius(['claude', 'third']).status, 3);
+});
+
+test('rate_limit_event parsing: last event wins, nested or malformed ones are ignored, newer readings are kept', async () => {
+  const ev = (o) => JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { unifiedWindows: o } });
+  assert.equal(limitsFromStreamJson(''), null);
+  assert.equal(limitsFromStreamJson(ev({ five_hour: { utilization: 'x' } })), null);
+  // Key order does not matter, but the event must be the line's own type.
+  assert.equal(limitsFromStreamJson(JSON.stringify({ rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.3 } } }, type: 'rate_limit_event' })).primary.usedPercent, 30);
+  assert.equal(limitsFromStreamJson(JSON.stringify({ type: 'system', note: 'rate_limit_event', rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.3 } } } })), null);
+  assert.equal(limitsFromStreamJson(`{"type":"assistant","message":{"content":[{"type":"text","text":${JSON.stringify(ev({ five_hour: { utilization: 0.5 } }))}}]}}`), null);
+  const l = limitsFromStreamJson([ev({ five_hour: { utilization: 0.2, resetsAt: 1 } }), 'not json', ev({ seven_day: { utilization: 1.4 } })].join('\n'));
+  assert.equal(l.primary, null);
+  assert.equal(l.secondary.usedPercent, 100);
+  // A reading older than the stored one (e.g. from the statusline bridge) does not overwrite it.
+  const resets = Math.floor(Date.now() / 1000) + 600;
+  nuncius(['statusline'], { input: JSON.stringify({ rate_limits: { five_hour: { used_percentage: 12, resets_at: resets } } }) });
+  const saved = process.env.NUNCIUS_HOME;
+  process.env.NUNCIUS_HOME = env.NUNCIUS_HOME;
+  try {
+    const { recordClaudeLimits, readClaudeLimits } = await import('../src/claude-limits.js');
+    recordClaudeLimits(limitsFromStreamJson(ev({ five_hour: { utilization: 0.8 } }), new Date(Date.now() - 3600000)));
+    assert.equal(readClaudeLimits().primary.usedPercent, 12);
+  } finally {
+    if (saved === undefined) delete process.env.NUNCIUS_HOME;
+    else process.env.NUNCIUS_HOME = saved;
+  }
+});
+
+test('reply-only: the answer comes back and the worktree and branch are removed, files and all', () => {
+  const r = nuncius(['claude', '--reply-only', 'WRITE:report.md']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, 'Claude did: WRITE:report.md\n');
+  assert.match(r.stderr, /reply only, worktree removed with 1 file\(s\) or folder\(s\) the target wrote/);
+  assert.doesNotMatch(r.stderr, /review:/);
+  const t = lastTask();
+  assert.equal(t.replyOnly, true);
+  assert.equal(t.worktree.removed, true);
+  assert.equal(t.worktree.changed, false);
+  assert.equal(t.worktree.branchDeleted, true);
+  assert.equal(t.worktree.discardedFiles, 1);
+  assert.equal(fs.existsSync(t.worktree.path), false);
+  // Nothing written: nothing reported as thrown away.
+  assert.match(nuncius(['claude', '--reply-only', 'just answer']).stderr, /reply only, worktree removed ·|reply only, worktree removed$/m);
+  assert.equal(lastTask().worktree.discardedFiles, undefined);
+  assert.equal(spawnSync('git', ['branch', '--list', t.worktree.branch], { cwd: repo, encoding: 'utf8' }).stdout.trim(), '');
+  // A failed reply-only task is thrown away too: there is nothing to inspect or close.
+  const f = nuncius(['claude', '--reply-only', 'WRITE:x.md FAIL']);
+  assert.notEqual(f.status, 0);
+  const ft = lastTask();
+  assert.equal(ft.state, 'failed');
+  assert.equal(ft.worktree.removed, true);
+  assert.equal(fs.existsSync(ft.worktree.path), false);
 });
 
 test('claude target: callers cannot pass permission flags', () => {

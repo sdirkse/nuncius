@@ -34,6 +34,7 @@ Options:
   --agent <name>    Who asked (default: NUNCIUS_AGENT, "claude" inside Claude Code, else "manual")
   --force           Run even when a budget is exceeded (only from an interactive terminal)
   --network         Let the target reach package registries and GitHub (network.domains), besides its own API
+  --reply-only      Only the answer is wanted: the worktree is thrown away when the target finishes
   --raw             Print the tool's raw output instead of only the final answer
   Use "-" as prompt to read it from stdin.
 
@@ -56,6 +57,7 @@ function parseArgs(argv) {
     else if (a === '--port') opts.port = Number(argv[++i]);
     else if (a === '--force') opts.force = true;
     else if (a === '--network') opts.network = true;
+    else if (a === '--reply-only') opts.replyOnly = true;
     else if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--days') opts.days = Number(argv[++i]);
     else if (a === '--raw') opts.raw = true;
@@ -112,7 +114,7 @@ async function runTool(tool, opts, rest) {
     if (note) console.error(`[nuncius] note: ${note}`);
   }
   const submitted = await submitTask({
-    target: tool, prompt, extraArgs: opts.extra, cwd, project, agent: detectAgent(opts.agent), caller: 'cli', force: !!opts.force, network: !!opts.network,
+    target: tool, prompt, extraArgs: opts.extra, cwd, project, agent: detectAgent(opts.agent), caller: 'cli', force: !!opts.force, network: !!opts.network, replyOnly: !!opts.replyOnly,
   });
   if (submitted.error) {
     console.error(`nuncius ${tool}: ${submitted.error}`);
@@ -146,7 +148,8 @@ async function runTool(tool, opts, rest) {
   }
   if (!res.ok) bits.push(`FAILED: ${shown(res.error)}`);
   const wt = task.worktree;
-  if (wt?.changed) bits.push(`changes on ${wt.branch} (${wt.files.length} file${wt.files.length === 1 ? '' : 's'})`);
+  if (wt?.replyOnly) bits.push(`reply only, worktree removed${wt.discardedFiles ? ` with ${wt.discardedFiles} file(s) or folder(s) the target wrote` : ''}`);
+  else if (wt?.changed) bits.push(`changes on ${wt.branch} (${wt.files.length} file${wt.files.length === 1 ? '' : 's'})`);
   else if (wt?.changed === false) bits.push('no file changes');
   else if (wt && !wt.removed) bits.push(`worktree kept at ${shown(wt.path)}`);
   console.error(bits.join(' · '));

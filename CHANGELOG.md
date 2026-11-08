@@ -4,6 +4,15 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Reply-only tasks:** `run_task` with `reply_only: true` (CLI: `--reply-only`) for research, reviews and votes. The target is told to give its whole answer in its reply; when it finishes, also when it fails or times out, its worktree and branch are removed with everything it wrote there (such as a repository it cloned), so there is nothing to apply, inspect or close. If the target wrote files anyway, the result says how many were thrown away (`discardedFiles`), so an answer that claims it "saved notes" doesn't mislead.
+- **Claude limits from Claude tasks:** every Claude task's own output reports the 5-hour and weekly windows (`rate_limit_event`), and nuncius now records them. Claude's limits no longer depend only on the statusline bridge, which runs only in terminal sessions. A reading carries the time Claude reported it, so a long task does not overwrite a newer reading from the statusline.
+
+### Changed
+
+- The MCP instructions, the `run_task` description and the skill ask agents to use `reply_only` for research, reviews and votes instead of asking for a report file.
+
 ## [0.3.0] - 2026-11-05
 
 ### Added
