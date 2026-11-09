@@ -1,6 +1,6 @@
 import { run } from '../spawn.js';
 import { num, tokens } from '../num.js';
-import { readClaudeLimits } from '../claude-limits.js';
+import { limitsFromStreamJson, rateLimitWindows, recordClaudeLimits } from '../claude-limits.js';
 
 // `claude -p --output-format stream-json --verbose` prints one JSON object per line; the one with
 // type "result" carries:
@@ -69,7 +69,14 @@ export async function runClaude({ bin, prompt, extraArgs, cwd, env, timeoutMs, e
   // `--` ends option parsing, so a prompt starting with '-' can never become a flag.
   const args = [...claudeArgs({ extraArgs }), '--', prompt];
   const cmd = wrap ? wrap(bin, args) : { bin, args };
-  const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn, onLine });
+  // When the limits were read: Claude prints its rate_limit_event near the start, so the end of a
+  // long task would make an older reading look newer than a statusline one taken meanwhile.
+  let limitsSeenAt = new Date();
+  const hear = (line) => {
+    if (rateLimitWindows(line)) limitsSeenAt = new Date();
+    onLine?.(line);
+  };
+  const res = await run(cmd.bin, cmd.args, { cwd, env: cmd.env ?? env, input: cmd.input, timeoutMs, echoStderr, onSpawn, onLine: hear });
   const obj = parseClaudeJson(res.stdout);
   const ok = res.code === 0 && !!obj && !obj.is_error;
   return {
@@ -81,8 +88,17 @@ export async function runClaude({ bin, prompt, extraArgs, cwd, env, timeoutMs, e
     output: obj?.result ?? '',
     rawStdout: res.stdout,
     usage: { ...claudeUsage(obj), durationMs: obj?.duration_ms == null ? null : num(obj.duration_ms) },
-    limits: readClaudeLimits(),
+    // Claude reports both windows in its own output; recorded so budgets and status see them.
+    limits: safeRecord(res.stdout, limitsSeenAt),
   };
+}
+
+function safeRecord(stdout, seenAt) {
+  try {
+    return recordClaudeLimits(limitsFromStreamJson(stdout, seenAt));
+  } catch {
+    return null; // never fail a task over the limits file
+  }
 }
 
 function lastLine(s) {

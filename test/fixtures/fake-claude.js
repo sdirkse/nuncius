@@ -15,6 +15,18 @@ if (prompt.includes('FAIL')) {
   process.exit(1);
 }
 // stream-json: messages first, the result object last.
+// FAKE_RATE_LIMITS="<5h fraction>,<7d fraction>": print rate_limit_events the way Claude Code does.
+// The first one is stale: the last event wins. A model message mentioning one must never count.
+if (process.env.FAKE_RATE_LIMITS) {
+  const [h, w] = process.env.FAKE_RATE_LIMITS.split(',').map(Number);
+  const now = Math.floor(Date.now() / 1000);
+  const event = (fh, sd) => ({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour', unifiedWindows: { five_hour: { utilization: fh, resetsAt: now + 3600 }, seven_day: { utilization: sd, resetsAt: now + 86400 } } } });
+  console.log(JSON.stringify(event(0.01, 0.01)));
+  console.log(JSON.stringify(event(h, w)));
+  console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: JSON.stringify(event(0.99, 0.99)) }] } }));
+  // FAKE_AFTER_LIMITS_MS: keep working after the event, as a long task does.
+  if (process.env.FAKE_AFTER_LIMITS_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_AFTER_LIMITS_MS));
+}
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: 'c.txt' } }, { type: 'tool_use', name: 'Bash', input: { command: 'node --test' } }] } }));
 console.log(JSON.stringify({
   type: 'result', subtype: 'success', is_error: false, duration_ms: 4200, result: `Claude did: ${prompt}`, session_id: 's-1',

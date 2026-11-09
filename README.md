@@ -79,7 +79,8 @@ What you can give Claude, from always-on to opt-in:
    (MCP tools `list_targets`, `run_task`, `wait_task`; or the `nuncius` CLI). Run them only through
    nuncius, so usage is logged and budgets apply. Review the diff before applying it, and ask me
    before applying anything listed in `sensitiveFiles`. When a task is refused, tell me why.
-   Close each task with `close_task` when you are done with it.
+   Close each task with `close_task` when you are done with it. For research, reviews and votes,
+   pass `reply_only: true` and ask for the answer in the reply, not in a file.
    ```
 
 **Optional safety net (Claude Code):** `nuncius install-hook` covers one case: Claude starting another agent CLI itself in Bash (`codex exec`, `cursor-agent -p` / `agent -p`, `claude -p`). The hook then tells Claude to use Nuncius instead, so that run is logged, budgeted and sandboxed too. It also refuses `nuncius ... --force` and the commands that change Nuncius's settings (`nuncius config set`, `nuncius setup`, …), so budgets stay your call. Everything else Claude runs in Bash (tests, git, builds) and housekeeping like `codex login` or `--version` pass as normal, and Claude's own work is not affected. Without the hook, Claude can still start those CLIs directly, only unlogged and unsandboxed.
@@ -123,7 +124,7 @@ Tools:
 | Tool | What it does |
 |---|---|
 | `list_targets` | The targets installed and enabled here, with their models (Cursor through `cursor-agent models`, Codex through its app-server `model/list`, Claude's model names from the config), capabilities, budget status, limits, queue and your aliases. Missing targets are listed under `unavailable` with the reason. |
-| `run_task` | `target` (an available target, or an alias you configured), `prompt`, and optionally `model`, `cwd`, `agent`, `network` (package registries and GitHub, default off), `wait_seconds`. The project (which budgets are keyed on) is always derived from `cwd`. Returns the result if the task finishes within `wait_seconds` (default 300), otherwise the task id with state `running` or `queued`. |
+| `run_task` | `target` (an available target, or an alias you configured), `prompt`, and optionally `model`, `cwd`, `agent`, `network` (package registries and GitHub, default off), `reply_only` (see below), `wait_seconds`. The project (which budgets are keyed on) is always derived from `cwd`. Returns the result if the task finishes within `wait_seconds` (default 300), otherwise the task id with state `running` or `queued`. |
 | `get_task` | The current state and result, without waiting. |
 | `wait_task` | Waits up to `timeout_seconds` (max 600) and returns the state and result. |
 | `close_task` | `id`, and optionally `keep`. Removes a finished task's worktree once the caller is done with it (the branch keeps unapplied work), or with `keep: true` keeps it on purpose. `run_task` and `list_targets` list the caller's own finished tasks whose worktree is still open under `openWorktrees`. |
@@ -138,9 +139,10 @@ Tasks run in detached worker processes that keep their state in `~/.nuncius/task
 Every task gets its own git worktree under `~/.nuncius-worktrees/`, next to the data dir rather than inside it, on the branch `nuncius/<target>/<id>`:
 
 - **Base:** the caller's `HEAD`, plus one snapshot commit of the caller's uncommitted changes and untracked files that are not ignored. The target sees what the caller sees. Ignored files such as `node_modules` and `.env` are not copied.
-- **Result:** when the target finishes, Nuncius commits its work on the task branch and returns the changed files, the diff stat, a patch file, and `review` / `apply` / `applyPatch` commands. **Nothing is merged for you.** The `apply` command (a `git cherry-pick`) runs with hooks off and reads `.gitattributes` from your current HEAD, so a hook or filter the target added cannot run code in your repo when you apply; `applyPatch` is a plain `git apply` of the patch (no commit, no hooks). Files that configure tools or run on their own (CI pipelines, git hooks, `.gitattributes`, `package.json`, `setup.py`, …) are listed in `sensitiveFiles` to review first. If the task made no changes, the worktree and branch are removed right away. Failed or timed-out tasks keep their worktree for inspection.
+- **Result:** when the target finishes, Nuncius commits its work on the task branch and returns the changed files, the diff stat, a patch file, and `review` / `apply` / `applyPatch` commands. **Nothing is merged for you.** The `apply` command (a `git cherry-pick`) runs with hooks off and reads `.gitattributes` from your current HEAD, so a hook or filter the target added cannot run code in your repo when you apply; `applyPatch` is a plain `git apply` of the patch (no commit, no hooks). Files that configure tools or run on their own (CI pipelines, git hooks, `.gitattributes`, `package.json`, `setup.py`, …) are listed in `sensitiveFiles` to review first. If the task made no changes, the worktree and branch are removed right away. Failed or timed-out tasks keep their worktree for inspection, except reply-only tasks.
 - **Cleanup:** worktrees whose commit is already in the repo's current branch (merged or cherry-picked) are removed automatically, together with their branch, whenever a task starts or the dashboard refreshes (set `worktrees.autoRemoveApplied` to `false` to turn this off). Work merged elsewhere, for example in a pull request you haven't pulled yet, counts once it's in your current branch. `nuncius cleanup` does the same on demand and also removes worktrees older than `worktrees.keepDays` (7). For those it keeps the branch, so no work is lost. Before any worktree is removed, anything uncommitted in it is first committed on its branch (marked as not reviewed): work a failed task never committed, and edits you made in the worktree after the task finished. Ignored files (`.env`, `node_modules`) are not preserved, the same way they are never copied in.
 - **Closing a task:** an agent that is done with a task's worktree calls the MCP tool `close_task`, also when it applied only part of the work by hand, rejected it, or only needed to read the answer. The worktree goes the same careful way as with `nuncius cleanup`: uncommitted edits are saved on the branch first, and the branch stays unless all of its work is in your repo. `close_task` with `keep: true` keeps a worktree on purpose: then neither the automatic cleanup nor `nuncius cleanup` removes it until it is closed. From the command line: `nuncius close <id> [--keep]`. When an agent starts new work (`run_task`, `list_targets`), nuncius lists the finished tasks that same session started whose worktree is still open, so it closes what it no longer needs.
+- **Reply-only tasks:** for research, reviews, votes and other questions, `run_task` with `reply_only: true` (CLI: `--reply-only`). The target is told to give its whole answer in its reply and that anything it writes is thrown away. When it finishes, whatever the outcome, its worktree and branch are removed, including anything it wrote there, such as a repository it cloned to study. There is nothing to review, apply or close.
 - Directories that are not git repositories, and repos without commits, are refused.
 
 Every target runs inside a macOS Seatbelt profile (`sandbox-exec`). If no sandbox is available, the task does not run; there is no unsandboxed fallback.
@@ -207,7 +209,9 @@ It refreshes every 15 seconds and filters by period (7, 30 or 90 days) and by pr
 
 ## Claude limits (statusline bridge)
 
-Claude Code shows your 5-hour and weekly usage only to interactive sessions, through the statusline input. Run this once:
+Nuncius gets Claude's 5-hour and weekly usage from two places, and keeps the newest reading:
+- **Every Claude task.** `claude -p` reports both windows in its own output (`rate_limit_event`), and Nuncius records them when the task ends. No setup needed, but this only updates when a Claude task runs.
+- **The statusline bridge.** Claude Code also gives these numbers to interactive terminal sessions, through the statusline input. Run this once:
 
 ```bash
 nuncius install-statusline
@@ -216,7 +220,7 @@ nuncius install-statusline
 From then on `nuncius statusline` records those limits in `~/.nuncius/claude-limits.json` and passes the input on to your previous statusline, so that keeps working. Your previous setting is saved, and `settings.json` is backed up as `settings.json.nuncius-backup`. Undo it with `nuncius uninstall-statusline`. No new Claude task starts once `budgets.claude.max5HourPercent` (90%) or `maxWeeklyPercent` (80%) is reached. Without recorded limits, the daily caps `budgets.claude.maxRunsPerDay` and `maxTokensPerDay` apply instead.
 
 When limits stay missing, `nuncius status` and the dashboard say why:
-- **Not run yet:** Claude Code's documentation only describes the statusline for the interactive terminal CLI (`claude`). The desktop app and the IDE extensions may never run it. Open `claude` in a terminal and send one message.
+- **Not run yet (and no Claude task has run):** Claude Code's documentation only describes the statusline for the interactive terminal CLI (`claude`). The desktop app and the IDE extensions may never run it. Open `claude` in a terminal and send one message.
 - **Ran, but no limits:** Claude Code only sends them for Pro and Max subscriptions (not API keys), after the first reply in a session.
 
 Running `nuncius install-statusline` again updates a bridge installed by an older Nuncius, for example after a Node upgrade moved the binary.
@@ -253,7 +257,7 @@ What it measures today:
 | | Codex | Cursor | Claude |
 |---|---|---|---|
 | Per task | input, cached and output tokens | input, cached and output tokens, plus duration | input, cached and output tokens (all models, incl. subagents), API cost estimate |
-| Limits | 5-hour and weekly window %, asked from Codex itself (`codex app-server`, outside the sandbox) and from your own `~/.codex/sessions` | own caps: runs, agent minutes and tokens per day | 5-hour and weekly window %, via the statusline bridge; otherwise daily caps |
+| Limits | 5-hour and weekly window %, asked from Codex itself (`codex app-server`, outside the sandbox) and from your own `~/.codex/sessions` | own caps: runs, agent minutes and tokens per day | 5-hour and weekly window %, from each Claude task's own output and the statusline bridge; otherwise daily caps |
 | Model used | from its session rollout | from its chat store | from `modelUsage` in its result |
 
 The session files the model is read from are copied to `~/.nuncius/runs/<id>-evidence/`. A file over 20 MiB (images are inlined as base64) is copied as `<name>.trimmed`, with every base64 run of 1 KiB or more replaced by a short marker and the copy cut at 20 MiB; files over 256 MiB are not read.
@@ -294,7 +298,7 @@ A task that would go over a budget is refused, with the reason. Nuncius checks b
 | `budgets.<tool>.max5HourPercent` | 90 | 90 | – | start no new task above this % of the 5-hour subscription window (resets within hours) |
 | `budgets.<tool>.maxWeeklyPercent` | 80 | 80 | – | start no new task above this % of the weekly subscription window. Lower by default: it takes days to reset, and you want room for your own work |
 
-`<tool>` is `codex`, `claude` or `cursor`. Cursor doesn't share its subscription usage, so only its daily limits apply. Claude's windows need the statusline bridge (see [Claude limits](#claude-limits-statusline-bridge)); until it has recorded them, only Claude's daily limits apply.
+`<tool>` is `codex`, `claude` or `cursor`. Cursor doesn't share its subscription usage, so only its daily limits apply. Claude's windows come from Claude tasks and the statusline bridge (see [Claude limits](#claude-limits-statusline-bridge)); until either has recorded them, only Claude's daily limits apply.
 
 **Per project:** the same daily limits under `budgets.projects.<project>.<tool>`. `<project>` is the git repository's folder name (or `--project`); a second checkout made with `git worktree add` counts as the same project, whatever its folder is called. A project limit applies on top of the global one, and the first one reached refuses the task:
 
@@ -425,7 +429,7 @@ Know these before you rely on Nuncius (the full list of residual risks is in the
 - **macOS only.** The sandbox is `sandbox-exec`; on other systems no task runs (there is no unsandboxed fallback).
 - **The vendor API is a channel.** A target, and the commands it runs, can reach its own vendor's API. A prompt-injected target holding an attacker's API key could send data it can read to that account (ADR 5). The target reads with the real `$HOME` (for Codex and Claude), so although credential stores, shell history, `~/.gitconfig` and browser data are blocked, the deny list is not a proof that nothing sensitive is readable: keep secrets out of the repositories you delegate from, and add their paths to `sandbox.extraDenyRead`.
 - **Budgets and the hook are guardrails against the calling agent.** The caller (Claude Code, Cursor) runs as you: it could edit `~/.nuncius/config.json`, unset markers or run CLIs in ways the hook does not recognise. They keep well-behaved agents within budget; the hard boundary is the sandbox around targets, which cannot call Nuncius at all. The hook exists for Claude Code only.
-- **Limits are only as fresh as their source.** Nuncius asks Codex for its limits (cached for a minute) before a task starts and after it ends, and never believes what a task writes. If Codex does not answer (logged out, offline), the last reading and your own session files are used. Claude limits only arrive through the statusline of an interactive Claude Code session (`nuncius install-statusline`); without it the daily caps apply. Cursor has no readable subscription window: only Nuncius's own run, minute and token caps.
+- **Limits are only as fresh as their source.** Nuncius asks Codex for its limits (cached for a minute) before a task starts and after it ends, and never believes what a task writes. If Codex does not answer (logged out, offline), the last reading and your own session files are used. Claude limits arrive with each Claude task Nuncius runs and through the statusline of an interactive Claude Code session (`nuncius install-statusline`). Between those they can be hours or days old; with none recorded, the daily caps apply. Cursor has no readable subscription window: only Nuncius's own run, minute and token caps.
 - **Usage is what the CLIs report.** Nuncius validates the numbers (no negative or non-numeric values, and no more tokens than a run of that length could use: 5 million a minute, at least 1 million per run) but cannot verify them; Cursor time uses Nuncius's wall clock as a floor.
 - **Models.** Cursor's models are discovered; Codex and Claude use the lists in the config. `blockedModels` catches a model passed with `--model`, not a CLI's default model or Cursor's `auto`.
 - **What the target sees.** Your HEAD plus uncommitted and untracked files, but not ignored files (`.env`, `node_modules`) and not untracked nested repositories. Network is off for commands unless the task asks for it, and then only the listed registries are reachable.

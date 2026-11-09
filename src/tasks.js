@@ -9,7 +9,7 @@ import { appendUsage, readUsage } from './log.js';
 import { checkBudget } from './budget.js';
 import { checkExtraArgs } from './args.js';
 import { TARGETS, TOOL_NAMES, isTarget, targetBin, findBin, targetStatus, codexAppServer } from './targets.js';
-import { createWorktree, finishWorktree, removeWorktree, gitVersionProblem, gitCommonDir, gitEnv, worktreesDir } from './worktree.js';
+import { createWorktree, finishWorktree, leftoverCount, removeWorktree, gitVersionProblem, gitCommonDir, gitEnv, worktreesDir } from './worktree.js';
 import { ACCOUNTS, usesAccount, accountsProblem, accountLogin, shareTree, shareRoot, claudeTempBase, stopAccount, reclaim, emptyHome } from './accounts.js';
 import { sandboxAvailable, sandboxWrapper, targetEnv } from './sandbox.js';
 import { startProxy } from './proxy.js';
@@ -448,7 +448,7 @@ export async function freshCodexLimits(config, { force = false } = {}) {
 }
 
 // Validate and record a task. Returns the task (state queued or refused) or { error } for bad input.
-export async function submitTask({ target, model, alias, prompt, extraArgs = [], cwd, project, agent, caller, force = false, network = false }) {
+export async function submitTask({ target, model, alias, prompt, extraArgs = [], cwd, project, agent, caller, force = false, network = false, replyOnly = false }) {
   const config = loadConfig();
   if (!isTarget(target)) return { error: `unknown target "${target}"` };
   // Only targets this user has: installed and not disabled. Said before anything is queued.
@@ -464,7 +464,7 @@ export async function submitTask({ target, model, alias, prompt, extraArgs = [],
 
   const base = {
     id: crypto.randomUUID(), target, model: model ?? null, alias: alias ?? null, prompt, args: args.args,
-    cwd, project, agent, caller: caller ?? null, force, network: !!network,
+    cwd, project, agent, caller: caller ?? null, force, network: !!network, ...(replyOnly ? { replyOnly: true } : {}),
     depth: envDepth(),
     createdAt: new Date().toISOString(), workerPid: null,
   };
@@ -649,12 +649,20 @@ function taskCursorHome() {
 
 // ADR 9: what every target is told before the actual task.
 export function withPreamble(task) {
+  // Reply-only: the caller wants an answer (research, a review, a vote), not changes. The worktree is
+  // scratch space and is thrown away when the target finishes, so the answer must be in the reply.
+  const work = task.replyOnly
+    ? [
+        '- This task asks for an answer, not for changes. Give your complete answer in your final reply: that reply is the only thing returned.',
+        '- You may use this directory as scratch space (for example to clone a repository you study), but every file you write here is thrown away when you finish. Do not write your answer to a file.',
+      ]
+    : ['- Make your changes in this directory. Do not commit, push or switch branches: nuncius commits your work when you finish.'];
   return [
     '[nuncius] You are working in an isolated git worktree of the caller\'s project, on its own branch.',
-    '- Make your changes in this directory. Do not commit, push or switch branches: nuncius commits your work when you finish.',
+    ...work,
     `- Network access for the commands you run is ${task.network ? 'ON' : 'OFF'}. Files outside this worktree are read-only or unavailable.`,
     '- Do not call nuncius or `nuncius` yourself.',
-    '- End with a short summary of what you changed and why.',
+    task.replyOnly ? '- End with your complete answer.' : '- End with a short summary of what you changed and why.',
     '',
     'Task:',
     task.prompt,
@@ -959,9 +967,16 @@ async function runTask(id, { echoStderr }, ctx) {
   // Raw output (Claude's stream-json is the whole transcript) lives only here, not in the task file.
   fs.writeFileSync(path.join(runsDir(), `${id}.out`), res.rawStdout ?? '');
   // Done: commit the target's work on the task branch. Failed or timed out: keep the worktree as-is for inspection.
+  // Reply-only: remove it whatever the outcome.
   let worktree = task.worktree;
   let commitError = null;
-  if (res.ok && !res.timedOut) {
+  if (task.replyOnly) {
+    // Nothing is committed or kept: whatever the target wrote was scratch, also when it failed. The
+    // caller is told how much was thrown away, since the answer may still refer to a file it wrote.
+    const discarded = leftoverCount(task.worktree);
+    const branchDeleted = removeWorktree(task.worktree, { deleteBranch: true });
+    worktree = { ...task.worktree, changed: false, removed: true, branchDeleted, replyOnly: true, ...(discarded ? { discardedFiles: discarded } : {}) };
+  } else if (res.ok && !res.timedOut) {
     try {
       worktree = finishWorktree(task.worktree, { id, target: task.target, prompt: task.prompt });
     } catch (err) {
@@ -1025,7 +1040,15 @@ export function publicTask(task) {
   if (task.warnings?.length) out.warnings = task.warnings;
   if (task.evidence) out.modelsReported = { models: task.evidence.models, source: task.evidence.source, files: task.evidence.files?.length ?? 0 };
   const wt = task.worktree;
-  if (wt) {
+  if (wt?.replyOnly) {
+    out.worktree = { replyOnly: true, removed: true, ...(wt.discardedFiles ? { discardedFiles: wt.discardedFiles } : {}) };
+    if (task.state === 'done')
+      out.next = 'Reply-only task: the answer is in result.output. Its worktree is already removed; there is nothing to apply or close.' +
+        // A count only: the names are target-controlled.
+        (wt.discardedFiles ? ` The target wrote ${wt.discardedFiles} file(s) or folder(s) there; they were thrown away with it, also if its answer says it saved something. Only result.output counts.` : '');
+    else if (task.state === 'failed' || task.state === 'timeout')
+      out.next = 'Reply-only task: its worktree is already removed, whatever the target wrote there included; there is nothing to inspect or close.';
+  } else if (wt) {
     out.worktree = wt.changed
       ? { branch: wt.branch, commit: wt.commit, base: wt.base, files: wt.files, diffStat: wt.diffStat, sensitiveFiles: wt.sensitiveFiles ?? [], ...(wt.repoDrivers ? { repoDrivers: wt.repoDrivers } : {}), patch: wt.patchPath, review: wt.review, apply: wt.apply, applyPatch: wt.applyPatch, ...(wt.removed ? { removed: true } : wt.keep ? { keep: true } : {}) }
       : wt.removed

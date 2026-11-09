@@ -172,6 +172,10 @@ export function gitCommonDir(wt) {
   }
 }
 
+// Never let a command here look inside submodule folders (git status/diff without
+// --ignore-submodules=all, for example): git then runs a second git in each one, which reads that
+// folder's own .git/config and .git/info/attributes. The target can write those, so a filter driver
+// it defines there would run on the host, outside the sandbox.
 function wtGit(wt, args, opts) {
   const dotGit = path.join(wt.path, '.git');
   const st = fs.lstatSync(dotGit, { throwIfNoEntry: false });
@@ -260,6 +264,24 @@ const HAS_UNSAFE = new RegExp(UNSAFE_CHARS, 'u');
 const UNSAFE = new RegExp(UNSAFE_CHARS, 'gu');
 export const displayName = (f) =>
   HAS_UNSAFE.test(f) ? `"${f.replace(/["\\]/g, '\\$&').replace(UNSAFE, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}"` : f;
+
+// How many paths the target left in its worktree (changed, new or deleted; a new folder, such as a
+// cloned repository, counts once). null when git cannot tell.
+// --ignore-submodules=all: see wtGit; without it, status runs git inside submodule folders.
+export function leftoverCount(wt) {
+  try {
+    const entries = wtGit(wt, ['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z', '--untracked-files=normal', '--ignore-submodules=all']).split('\0');
+    let n = 0;
+    for (let i = 0; i < entries.length; i++) {
+      if (entries[i].length < 4) continue;
+      n++;
+      if (/[RC]/.test(entries[i].slice(0, 2))) i++; // a rename or copy is followed by its old path
+    }
+    return n;
+  } catch {
+    return null;
+  }
+}
 
 // Commit what the target changed. No changes: the worktree and branch are removed right away.
 export function finishWorktree(wt, { id, target, prompt }) {
