@@ -8,7 +8,7 @@ import { targetStatus, findBin, TOOL_NAMES as NAMES } from './targets.js';
 import { setSetting, unsetSetting, getSetting, parseFor, spec, valuesOf, formatValue } from './settings.js';
 import { statuslineInstalled, installStatusline } from './statusline.js';
 import { hookInstalled, installHook } from './hook-install.js';
-import { readJson, writeJson } from './claude-settings.js';
+import { readJson, writeJson, stableNode } from './claude-settings.js';
 import { underAgent } from './tasks.js';
 
 // `nuncius setup`: a short first-time walk-through. It finds the tools, asks for the budgets, and
@@ -19,9 +19,10 @@ import { underAgent } from './tasks.js';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOGIN = { codex: 'codex login', cursor: 'cursor-agent login', claude: 'claude (then /login)' };
 
-// How the tools should start nuncius's MCP server: `nuncius` when it is on PATH, else node + nuncius.js.
+// How the tools should start nuncius's MCP server: `nuncius` when it is on PATH, else node + nuncius.js,
+// with a node path that survives a Node upgrade.
 export function nunciusCommand() {
-  return findBin('nuncius') ? ['nuncius', 'mcp'] : [process.execPath, path.join(ROOT, 'bin', 'nuncius.js'), 'mcp'];
+  return findBin('nuncius') ? ['nuncius', 'mcp'] : [stableNode(), path.join(ROOT, 'bin', 'nuncius.js'), 'mcp'];
 }
 
 const yes = (answer, dflt) => (answer.trim() === '' ? dflt : /^y(es)?$/i.test(answer.trim()));

@@ -46,3 +46,21 @@ export function stableNode(execPath = process.execPath, pathEnv = process.env.PA
   }
   return execPath;
 }
+
+// The node binary to start a child process with. A long-running process (the MCP server lives as
+// long as the session that started it) can outlive a Node upgrade: its own versioned execPath is then
+// deleted and spawning it fails with ENOENT. The `node` on PATH, the upgraded one, takes over then.
+export function liveNode(execPath = process.execPath, pathEnv = process.env.PATH ?? '') {
+  if (fs.existsSync(execPath)) return execPath;
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!path.isAbsolute(dir)) continue;
+    const candidate = path.join(dir, 'node');
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // not there
+    }
+  }
+  return execPath;
+}

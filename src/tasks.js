@@ -18,6 +18,7 @@ import { latestCodexLimits } from './summary.js';
 import { collectEvidence } from './evidence.js';
 import { clampRunUsage } from './num.js';
 import { stopStrays } from './strays.js';
+import { liveNode } from './claude-settings.js';
 import { createProgress, progressView, shortDuration, parseActivityLog, cleanLabel, MAX_LOG } from './progress.js';
 
 // A task lives in tasks/<id>.json and moves queued → running → done | failed | timeout.
@@ -681,7 +682,7 @@ function refuse(base, reasons) {
 
 // Start a detached worker for a queued task (used by the MCP server).
 export function spawnWorker(id) {
-  const child = spawn(process.execPath, [NUNCIUS_BIN, '__worker', id], { detached: true, stdio: 'ignore', env: process.env });
+  const child = spawn(liveNode(), [NUNCIUS_BIN, '__worker', id], { detached: true, stdio: 'ignore', env: process.env });
   // Without a listener, a failed spawn (EAGAIN, EMFILE, ...) would crash the MCP server.
   child.on('error', (err) => {
     try {
