@@ -513,6 +513,29 @@ test('commands written into settings.json use a node path that survives upgrades
   assert.equal(stableNode(process.execPath, '/nowhere'), process.execPath);
 });
 
+test('workers still start after a Node upgrade removed the server\'s own node binary', async () => {
+  const { liveNode } = await import('../src/claude-settings.js');
+  const bin = path.join(home, 'bin-live');
+  fs.mkdirSync(bin);
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  const gone = path.join(home, 'Cellar', 'node', '26.0.0', 'bin', 'node');
+  assert.equal(liveNode(process.execPath, bin), process.execPath);
+  assert.equal(liveNode(gone, `relative:/nowhere:${bin}`), path.join(bin, 'node'));
+  assert.equal(liveNode(gone, '/nowhere'), gone);
+
+  // An MCP server whose execPath is gone: spawnWorker must still start a process.
+  const script = `
+    process.execPath = ${JSON.stringify(gone)};
+    const { spawnWorker } = await import(${JSON.stringify(path.join(root, 'src', 'tasks.js'))});
+    const pid = spawnWorker('00000000-0000-4000-8000-000000000000');
+    process.stdout.write(String(pid));`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...env, PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^\d+$/);
+});
+
 test('install-statusline refreshes a bridge installed with an outdated command', async () => {
   const cfg = path.join(home, 'claude-old');
   fs.mkdirSync(cfg);
