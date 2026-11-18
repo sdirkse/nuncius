@@ -4,6 +4,13 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-18
+
+### Fixed
+
+- **Tasks failed after a Node upgrade.** An MCP server keeps running as long as the session that started it, and it started task workers with its own Node binary. Once an upgrade (such as `brew upgrade node`) removed that version, every task it submitted failed at once with `could not start a worker: spawn …/node ENOENT`. Workers now start with the `node` on PATH when the server's own binary is gone.
+- When `nuncius` isn't on PATH, `nuncius setup` wrote the versioned Node path into the MCP configs, which broke on the next Node upgrade. It now writes the stable path (e.g. `/opt/homebrew/bin/node`), as the hook and statusline commands already do.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added
@@ -71,7 +78,8 @@ All notable changes to nuncius are listed here, newest first. The format follows
 
 First public version: an MCP server and CLI that hand coding tasks to Codex, Cursor and Claude on your own subscriptions, each task sandboxed in its own git worktree, with usage logging, budgets and a dashboard.
 
-[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/sdirkse/nuncius/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/sdirkse/nuncius/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/sdirkse/nuncius/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sdirkse/nuncius/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/sdirkse/nuncius/compare/v0.2.1...v0.2.2
